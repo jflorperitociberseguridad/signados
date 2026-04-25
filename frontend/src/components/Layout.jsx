@@ -7,6 +7,7 @@ import {
   Type,
   MessageSquare,
   SpellCheck,
+  BarChart3,
 } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 
@@ -92,6 +93,12 @@ export default function Layout() {
               icon={History}
               label="Historial"
               testId="nav-history"
+            />
+            <NavItem
+              to="/analytics"
+              icon={BarChart3}
+              label="Analítica"
+              testId="nav-analytics"
             />
             <ThemeToggle />
           </nav>

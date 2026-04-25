@@ -1,5 +1,6 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { useEffect } from "react";
+import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import Layout from "@/components/Layout";
 import Home from "@/pages/Home";
@@ -10,11 +11,22 @@ import HistoryPage from "@/pages/History";
 import Conversation from "@/pages/Conversation";
 import Fingerspelling from "@/pages/Fingerspelling";
 import SharePage from "@/pages/SharePage";
+import Analytics from "@/pages/Analytics";
+import { trackEvent } from "@/lib/api";
+
+function PageTracker() {
+  const loc = useLocation();
+  useEffect(() => {
+    trackEvent("page_view", { path: loc.pathname });
+  }, [loc.pathname]);
+  return null;
+}
 
 export default function App() {
   return (
     <div className="App">
       <BrowserRouter>
+        <PageTracker />
         <Routes>
           <Route element={<Layout />}>
             <Route path="/" element={<Home />} />
@@ -24,6 +36,7 @@ export default function App() {
             <Route path="/diccionario" element={<Dictionary />} />
             <Route path="/historial" element={<HistoryPage />} />
             <Route path="/conversacion" element={<Conversation />} />
+            <Route path="/analytics" element={<Analytics />} />
             <Route path="/t/:id" element={<SharePage />} />
           </Route>
         </Routes>

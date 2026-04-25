@@ -364,3 +364,231 @@ class TestGetTranslationById:
         r = http.get(f"{API}/translation/does-not-exist-{uuid.uuid4().hex}", timeout=30)
         assert r.status_code == 404
         assert "detail" in r.json()
+
+
+# ---------- Analytics (Iteration 3) ----------
+class TestAnalytics:
+    """Analytics endpoints: /api/analytics/event (POST) and /api/analytics/summary (GET).
+
+    Covers:
+    - Manual event recording via POST /analytics/event
+    - Summary structure (totals, by_type, by_mode, by_language, by_day, top_words, top_dictionary_searches)
+    - by_day series length matches the `days` query param
+    - Empty-state safety (zero translations + only events still returns valid JSON)
+    - Auto event recording from translate/* endpoints + dictionary search
+    - Events accumulate independently of db.translations (DELETE /history doesn't clear events)
+    """
+
+    def test_post_analytics_event_minimal(self, http):
+        unique_type = f"TEST_event_{uuid.uuid4().hex[:8]}"
+        r = http.post(
+            f"{API}/analytics/event",
+            json={"type": unique_type, "data": {"foo": "bar", "n": 1}},
+            timeout=30,
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body == {"ok": True}
+
+        # Verify it shows up in summary by_type
+        time.sleep(0.3)
+        s = http.get(f"{API}/analytics/summary", params={"days": 7}, timeout=30)
+        assert s.status_code == 200, s.text
+        data = s.json()
+        assert "by_type" in data
+        assert data["by_type"].get(unique_type, 0) >= 1, data["by_type"]
+
+    def test_post_analytics_event_no_data(self, http):
+        # data field is optional
+        r = http.post(
+            f"{API}/analytics/event",
+            json={"type": "TEST_no_data_event"},
+            timeout=30,
+        )
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+
+    def test_post_analytics_event_invalid_payload(self, http):
+        # Missing required 'type' must yield 422
+        r = http.post(f"{API}/analytics/event", json={"data": {"x": 1}}, timeout=30)
+        assert r.status_code == 422
+
+    def test_summary_structure_and_keys(self, http):
+        r = http.get(f"{API}/analytics/summary", params={"days": 14}, timeout=30)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        for key in (
+            "totals",
+            "by_type",
+            "by_mode",
+            "by_language",
+            "by_day",
+            "top_words",
+            "top_dictionary_searches",
+        ):
+            assert key in data, f"missing {key} in summary"
+        # totals shape
+        assert "translations" in data["totals"]
+        assert "events" in data["totals"]
+        assert isinstance(data["totals"]["translations"], int)
+        assert isinstance(data["totals"]["events"], int)
+        # types
+        assert isinstance(data["by_type"], dict)
+        assert isinstance(data["by_mode"], list)
+        assert isinstance(data["by_language"], list)
+        assert isinstance(data["by_day"], list)
+        assert isinstance(data["top_words"], list)
+        assert isinstance(data["top_dictionary_searches"], list)
+        # by_day length == days
+        assert len(data["by_day"]) == 14
+        for entry in data["by_day"]:
+            assert "day" in entry and "count" in entry
+            assert isinstance(entry["count"], int)
+
+    def test_summary_days_param_changes_series_length(self, http):
+        r = http.get(f"{API}/analytics/summary", params={"days": 3}, timeout=30)
+        assert r.status_code == 200
+        assert len(r.json()["by_day"]) == 3
+
+        r = http.get(f"{API}/analytics/summary", params={"days": 30}, timeout=30)
+        assert r.status_code == 200
+        assert len(r.json()["by_day"]) == 30
+
+    def test_summary_empty_state_is_safe(self, http):
+        # Clear translations; events should still aggregate fine and translations totals=0
+        clr = http.delete(f"{API}/history", timeout=30)
+        assert clr.status_code == 200
+
+        r = http.get(f"{API}/analytics/summary", params={"days": 14}, timeout=30)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # After clearing, translations count must be 0
+        assert data["totals"]["translations"] == 0
+        # No translations -> by_mode/by_language/top_words derived from translations should be empty
+        assert data["by_mode"] == []
+        assert data["by_language"] == []
+        assert data["top_words"] == []
+        # by_day still present and zero-filled
+        assert len(data["by_day"]) == 14
+        assert all(e["count"] == 0 for e in data["by_day"])
+        # events are NOT cleared by /history delete; events count may be > 0
+        assert isinstance(data["totals"]["events"], int)
+
+    def test_dictionary_search_records_event(self, http):
+        unique_q = f"TEST_q_{uuid.uuid4().hex[:6]}"
+        # Take a baseline count
+        before = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        before_ds = before["by_type"].get("dictionary_search", 0)
+
+        # Issue a dictionary search (q triggers record_event)
+        r = http.get(f"{API}/dictionary", params={"q": unique_q}, timeout=30)
+        assert r.status_code == 200
+
+        time.sleep(0.4)
+        after = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        after_ds = after["by_type"].get("dictionary_search", 0)
+        assert after_ds == before_ds + 1, (
+            f"dictionary_search count did not increase: before={before_ds} after={after_ds}"
+        )
+
+        # Search query should also appear in top_dictionary_searches (we used a unique q)
+        # NOTE: top_dictionary_searches is limited to 12; unique_q should be there since count==1
+        top = after.get("top_dictionary_searches", [])
+        assert any(it.get("q") == unique_q for it in top), top
+
+    def test_dictionary_no_q_does_not_record_event(self, http):
+        # Listing without q must NOT record an event
+        before = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        before_ds = before["by_type"].get("dictionary_search", 0)
+
+        r = http.get(f"{API}/dictionary", timeout=30)
+        assert r.status_code == 200
+
+        time.sleep(0.3)
+        after = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        after_ds = after["by_type"].get("dictionary_search", 0)
+        assert after_ds == before_ds, "dictionary listing without q must not create event"
+
+    def test_text_to_sign_records_event(self, http):
+        before = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        before_t2s = before["by_type"].get("text_to_sign", 0)
+
+        r = http.post(
+            f"{API}/translate/text-to-sign",
+            json={"text": "Hola analytics", "target_language": "LSE"},
+            timeout=TIMEOUT,
+        )
+        assert r.status_code == 200, r.text
+
+        time.sleep(0.5)
+        after = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        after_t2s = after["by_type"].get("text_to_sign", 0)
+        assert after_t2s == before_t2s + 1, (
+            f"text_to_sign event not recorded: before={before_t2s} after={after_t2s}"
+        )
+
+        # Translations totals should also have grown by exactly 1
+        assert after["totals"]["translations"] >= before["totals"]["translations"] + 1
+
+    def test_translate_frames_records_event(self, http, sample_frames):
+        before = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        before_tf = before["by_type"].get("translate_frames", 0)
+
+        r = http.post(
+            f"{API}/translate/frames",
+            json={"frames": sample_frames[:3], "mode": "streaming", "duration": 1.0},
+            timeout=TIMEOUT,
+        )
+        # AI may 502 on synthetic frames; only assert event when 200
+        assert r.status_code in (200, 502), r.text
+
+        time.sleep(0.4)
+        after = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        after_tf = after["by_type"].get("translate_frames", 0)
+        if r.status_code == 200:
+            assert after_tf == before_tf + 1, (
+                f"translate_frames event not recorded on 200: before={before_tf} after={after_tf}"
+            )
+        else:
+            # On 502 (Gemini failure before record_event) event must NOT be recorded
+            assert after_tf == before_tf
+
+    def test_fingerspelling_records_event(self, http, sample_frames):
+        before = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        before_fs = before["by_type"].get("fingerspelling", 0)
+
+        r = http.post(
+            f"{API}/translate/fingerspelling",
+            json={"frames": sample_frames[:3]},
+            timeout=TIMEOUT,
+        )
+        assert r.status_code in (200, 502), r.text
+
+        time.sleep(0.4)
+        after = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        after_fs = after["by_type"].get("fingerspelling", 0)
+        if r.status_code == 200:
+            assert after_fs == before_fs + 1
+        else:
+            assert after_fs == before_fs
+
+    def test_events_persist_after_history_clear(self, http):
+        # Push an event, clear history, verify event count not reduced
+        marker = f"TEST_persist_{uuid.uuid4().hex[:8]}"
+        r = http.post(
+            f"{API}/analytics/event",
+            json={"type": marker, "data": {}},
+            timeout=30,
+        )
+        assert r.status_code == 200
+
+        # Clear translations
+        r = http.delete(f"{API}/history", timeout=30)
+        assert r.status_code == 200
+
+        s = http.get(f"{API}/analytics/summary", params={"days": 14}, timeout=30).json()
+        # Translations cleared
+        assert s["totals"]["translations"] == 0
+        # But events still include our marker
+        assert s["by_type"].get(marker, 0) >= 1
+

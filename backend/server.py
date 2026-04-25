@@ -139,6 +139,114 @@ def _parse_json(raw: str) -> dict:
     return {"translated_text": raw, "detected_language": "Desconocido", "confidence": "baja", "notes": ""}
 
 
+# ---------- Analytics ----------
+async def record_event(event_type: str, data: Optional[dict] = None):
+    """Anonymous, server-side event tracking. Never stores PII."""
+    try:
+        doc = {
+            "id": str(uuid.uuid4()),
+            "type": event_type,
+            "data": data or {},
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.events.insert_one(doc)
+    except Exception:
+        # never let analytics break a user request
+        pass
+
+
+class AnalyticsEvent(BaseModel):
+    type: str
+    data: Optional[dict] = None
+
+
+@api_router.post("/analytics/event")
+async def post_event(payload: AnalyticsEvent):
+    await record_event(payload.type, payload.data)
+    return {"ok": True}
+
+
+@api_router.get("/analytics/summary")
+async def analytics_summary(days: int = 14):
+    """Aggregated, anonymous usage metrics."""
+    # Totals by type
+    types_pipeline = [
+        {"$group": {"_id": "$type", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]
+    by_type_raw = await db.events.aggregate(types_pipeline).to_list(100)
+    by_type = {x["_id"]: x["count"] for x in by_type_raw}
+
+    # Translations: count per mode & language
+    trans = await db.translations.find(
+        {}, {"_id": 0, "mode": 1, "detected_language": 1, "translated_text": 1, "created_at": 1}
+    ).to_list(5000)
+
+    by_mode: dict = {}
+    by_language: dict = {}
+    word_counter: dict = {}
+    by_day: dict = {}
+    for t in trans:
+        m = t.get("mode") or "unknown"
+        by_mode[m] = by_mode.get(m, 0) + 1
+        lang = t.get("detected_language") or "Desconocido"
+        by_language[lang] = by_language.get(lang, 0) + 1
+        ts = t.get("created_at")
+        if isinstance(ts, str):
+            day = ts[:10]
+            by_day[day] = by_day.get(day, 0) + 1
+        # naive word frequency (Spanish, lowercased, >2 chars)
+        text = (t.get("translated_text") or "").lower()
+        for w in text.split():
+            w = "".join(c for c in w if c.isalpha())
+            if len(w) >= 3 and w not in _STOPWORDS:
+                word_counter[w] = word_counter.get(w, 0) + 1
+
+    # Dictionary searches (analytics events)
+    dict_pipeline = [
+        {"$match": {"type": "dictionary_search"}},
+        {"$group": {"_id": "$data.q", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 12},
+    ]
+    dict_top = await db.events.aggregate(dict_pipeline).to_list(12)
+    top_dict = [{"q": x["_id"] or "", "count": x["count"]} for x in dict_top if x["_id"]]
+
+    top_words = sorted(word_counter.items(), key=lambda kv: -kv[1])[:15]
+    top_words = [{"word": w, "count": c} for w, c in top_words]
+
+    # Daily series for last N days
+    today = datetime.now(timezone.utc).date()
+    series = []
+    for i in range(days - 1, -1, -1):
+        from datetime import timedelta
+        d = today - timedelta(days=i)
+        key = d.isoformat()
+        series.append({"day": key, "count": by_day.get(key, 0)})
+
+    return {
+        "totals": {
+            "translations": len(trans),
+            "events": sum(by_type.values()),
+        },
+        "by_type": by_type,
+        "by_mode": [{"mode": k, "count": v} for k, v in sorted(by_mode.items(), key=lambda kv: -kv[1])],
+        "by_language": [{"language": k, "count": v} for k, v in sorted(by_language.items(), key=lambda kv: -kv[1])],
+        "by_day": series,
+        "top_words": top_words,
+        "top_dictionary_searches": top_dict,
+    }
+
+
+_STOPWORDS = {
+    "que", "para", "como", "con", "los", "las", "del", "una", "uno", "por",
+    "muy", "está", "esta", "este", "ese", "esa", "soy", "eres", "tus",
+    "más", "pero", "qué", "cuál", "donde", "cuando", "porque", "tambien", "también",
+    "mis", "sus", "ser", "haber", "hacer", "tiene", "tener", "todo", "toda",
+    "algun", "alguna", "algo", "alguien", "nada", "nadie", "siempre",
+}
+
+
 # ---------- Routes ----------
 @api_router.get("/")
 async def root():
@@ -185,6 +293,12 @@ async def translate_video(
         doc = item.model_dump()
         doc["created_at"] = doc["created_at"].isoformat()
         await db.translations.insert_one(doc)
+        await record_event("translate_video", {
+            "mode": mode,
+            "language": item.detected_language,
+            "confidence": item.confidence,
+            "duration": duration,
+        })
         return item
     finally:
         try:
@@ -252,6 +366,11 @@ Responde EXCLUSIVAMENTE en JSON válido (sin markdown):
     doc = item.model_dump()
     doc["created_at"] = doc["created_at"].isoformat()
     await db.translations.insert_one(doc)
+    await record_event("text_to_sign", {
+        "language": response.language,
+        "steps": len(response.steps),
+        "chars": len(payload.text or ""),
+    })
 
     return response
 
@@ -306,6 +425,11 @@ async def translate_frames(payload: FramesRequest):
     doc = item.model_dump()
     doc["created_at"] = doc["created_at"].isoformat()
     await db.translations.insert_one(doc)
+    await record_event("translate_frames", {
+        "frames": len(frames),
+        "language": item.detected_language,
+        "confidence": item.confidence,
+    })
     return item
 
 
@@ -353,6 +477,11 @@ async def translate_fingerspelling(payload: FramesRequest):
     doc = item.model_dump()
     doc["created_at"] = doc["created_at"].isoformat()
     await db.translations.insert_one(doc)
+    await record_event("fingerspelling", {
+        "letters": len(parsed.get("letters", [])),
+        "language": item.detected_language,
+        "confidence": item.confidence,
+    })
     return {
         "id": item.id,
         "word": word,
@@ -484,6 +613,7 @@ async def list_dictionary(q: Optional[str] = None, language: Optional[str] = Non
     if q:
         ql = q.lower()
         items = [i for i in items if ql in i.word.lower() or ql in i.description.lower()]
+        await record_event("dictionary_search", {"q": q, "language": language or "all", "results": len(items)})
     return items
 
 

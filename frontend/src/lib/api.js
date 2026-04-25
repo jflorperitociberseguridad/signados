@@ -64,3 +64,14 @@ export async function getLanguages() {
   const { data } = await api.get("/dictionary/languages");
   return data.languages;
 }
+
+export async function getAnalyticsSummary(days = 14) {
+  const { data } = await api.get("/analytics/summary", { params: { days } });
+  return data;
+}
+
+export async function trackEvent(type, data = {}) {
+  try {
+    await api.post("/analytics/event", { type, data });
+  } catch {}
+}
