@@ -6,7 +6,9 @@ import {
   History,
   Type,
   MessageSquare,
+  SpellCheck,
 } from "lucide-react";
+import ThemeToggle from "./ThemeToggle";
 
 const NavItem = ({ to, icon: Icon, label, testId }) => (
   <NavLink
@@ -17,7 +19,7 @@ const NavItem = ({ to, icon: Icon, label, testId }) => (
       `flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
         isActive
           ? "bg-[#002FA7] text-white"
-          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white"
       }`
     }
   >
@@ -28,10 +30,10 @@ const NavItem = ({ to, icon: Icon, label, testId }) => (
 
 export default function Layout() {
   return (
-    <div className="min-h-screen bg-white text-slate-900 flex flex-col">
+    <div className="min-h-screen bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col transition-colors duration-200">
       <header
         data-testid="app-header"
-        className="border-b border-slate-200 bg-white/80 backdrop-blur-md sticky top-0 z-30"
+        className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md sticky top-0 z-30"
       >
         <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-4 flex items-center gap-6">
           <Link
@@ -43,9 +45,7 @@ export default function Layout() {
               <Hand className="w-5 h-5" />
             </span>
             <div className="leading-tight">
-              <div className="font-display font-semibold text-slate-900">
-                SignLanguage
-              </div>
+              <div className="font-display font-semibold">SignLanguage</div>
               <div className="font-display text-xs text-slate-500 -mt-0.5 tracking-wide">
                 PRO
               </div>
@@ -60,7 +60,7 @@ export default function Layout() {
             <NavItem
               to="/traducir-en-vivo"
               icon={Video}
-              label="Traducir en vivo"
+              label="En vivo"
               testId="nav-live"
             />
             <NavItem
@@ -68,6 +68,12 @@ export default function Layout() {
               icon={Type}
               label="Texto a signos"
               testId="nav-text-to-sign"
+            />
+            <NavItem
+              to="/alfabeto"
+              icon={SpellCheck}
+              label="Alfabeto"
+              testId="nav-fingerspelling"
             />
             <NavItem
               to="/conversacion"
@@ -87,6 +93,7 @@ export default function Layout() {
               label="Historial"
               testId="nav-history"
             />
+            <ThemeToggle />
           </nav>
         </div>
       </header>
@@ -97,9 +104,9 @@ export default function Layout() {
 
       <footer
         data-testid="app-footer"
-        className="border-t border-slate-200 mt-12"
+        className="border-t border-slate-200 dark:border-slate-800 mt-12"
       >
-        <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-sm text-slate-500">
+        <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-sm text-slate-500 dark:text-slate-400">
           <div>
             © {new Date().getFullYear()} SignLanguage Pro · Comunicación
             inclusiva impulsada por IA

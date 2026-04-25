@@ -10,8 +10,11 @@ body {
     font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background: #FFFFFF;
-    color: #0F172A;
+}
+
+html.dark body {
+    background: #050a18;
+    color: #f1f5f9;
 }
 
 .font-display {
@@ -41,6 +44,27 @@ body {
         --input: 214 32% 91%;
         --ring: 222 100% 33%;
         --radius: 0.5rem;
+    }
+    .dark {
+        --background: 222 47% 6%;
+        --foreground: 210 40% 98%;
+        --card: 222 47% 8%;
+        --card-foreground: 210 40% 98%;
+        --popover: 222 47% 8%;
+        --popover-foreground: 210 40% 98%;
+        --primary: 222 100% 60%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 217 33% 14%;
+        --secondary-foreground: 210 40% 98%;
+        --muted: 217 33% 14%;
+        --muted-foreground: 215 20% 65%;
+        --accent: 217 33% 14%;
+        --accent-foreground: 210 40% 98%;
+        --destructive: 0 63% 45%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 217 33% 18%;
+        --input: 217 33% 18%;
+        --ring: 222 100% 60%;
     }
 }
 

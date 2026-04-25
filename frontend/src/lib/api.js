@@ -17,6 +17,21 @@ export async function translateVideo(blob, { mode = "video", duration } = {}) {
   return data;
 }
 
+export async function translateFrames(frames, { mode = "streaming", duration } = {}) {
+  const { data } = await api.post("/translate/frames", { frames, mode, duration });
+  return data;
+}
+
+export async function translateFingerspelling(frames) {
+  const { data } = await api.post("/translate/fingerspelling", { frames });
+  return data;
+}
+
+export async function getTranslation(id) {
+  const { data } = await api.get(`/translation/${id}`);
+  return data;
+}
+
 export async function textToSign(text, target_language = "auto") {
   const { data } = await api.post("/translate/text-to-sign", {
     text,

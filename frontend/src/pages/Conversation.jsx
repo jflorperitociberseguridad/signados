@@ -100,7 +100,7 @@ export default function Conversation() {
             </Badge>
           </div>
           <SignCamera
-            liveMode={true}
+            mode="live"
             clipDuration={5}
             onClipReady={handleSignerClip}
             statusText={busyA && !signerLatest ? "Analizando…" : signerLatest}

@@ -12,10 +12,12 @@ import os
 import io
 import uuid
 import time
+import base64
 import pytest
 import requests
 import subprocess
 from pathlib import Path
+from PIL import Image, ImageDraw
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL")
 if not BASE_URL:
@@ -110,6 +112,32 @@ class TestDictionary:
         # Should contain at least these
         for lang in ("LSE", "LSM", "ASL"):
             assert lang in data["languages"], data
+
+    def test_dictionary_total_count_68(self, http):
+        # Iteration 2: dictionary expanded to 68 entries across LSE/LSM/ASL
+        r = http.get(f"{API}/dictionary", timeout=30)
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data) == 68, f"Expected 68 entries, got {len(data)}"
+        # Sanity: per-language presence
+        langs = {i["language"] for i in data}
+        assert {"LSE", "LSM", "ASL"}.issubset(langs)
+
+
+# ---------- Frame-based AI fixtures ----------
+def _generate_frame_b64(seed: int) -> str:
+    """Generate a small (64x64) JPEG image base64 string (no data: prefix)."""
+    img = Image.new("RGB", (64, 64), color=(seed * 20 % 255, 50, 100))
+    d = ImageDraw.Draw(img)
+    d.rectangle([10, 10, 50, 50], fill=(255 - seed * 10 % 255, 200, 50))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=70)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+@pytest.fixture(scope="session")
+def sample_frames():
+    return [_generate_frame_b64(i) for i in range(6)]
 
 
 # ---------- Text-to-sign ----------
@@ -236,3 +264,103 @@ class TestHistory:
         r = http.delete(f"{API}/history/nonexistent-id-xyz", timeout=30)
         assert r.status_code == 200
         assert r.json().get("deleted") == 0
+
+
+# ---------- Frames translation (live/streaming via base64 frames) ----------
+class TestFramesTranslation:
+    def test_translate_frames_success(self, http, sample_frames):
+        payload = {"frames": sample_frames, "mode": "streaming", "duration": 3.0}
+        r = http.post(f"{API}/translate/frames", json=payload, timeout=TIMEOUT)
+        # Acceptable: 200 (Gemini ok) or 502 (Gemini error on synthetic frames)
+        assert r.status_code in (200, 502), f"Unexpected status: {r.status_code}, body: {r.text[:500]}"
+        if r.status_code == 200:
+            data = r.json()
+            assert "id" in data
+            assert "translated_text" in data
+            assert "detected_language" in data
+            assert "confidence" in data
+            assert data.get("mode") == "streaming"
+            assert data.get("duration_seconds") == 3.0
+            # Verify persistence via /api/translation/{id}
+            time.sleep(0.3)
+            g = http.get(f"{API}/translation/{data['id']}", timeout=30)
+            assert g.status_code == 200, g.text
+            fetched = g.json()
+            assert fetched["id"] == data["id"]
+            assert fetched["mode"] == "streaming"
+            assert fetched["translated_text"] == data["translated_text"]
+
+    def test_translate_frames_empty_returns_400(self, http):
+        r = http.post(f"{API}/translate/frames", json={"frames": []}, timeout=30)
+        assert r.status_code == 400, r.text
+        assert "detail" in r.json()
+
+    def test_translate_frames_default_mode(self, http, sample_frames):
+        # Omit mode/duration; backend should default mode to 'streaming'
+        payload = {"frames": sample_frames[:3]}
+        r = http.post(f"{API}/translate/frames", json=payload, timeout=TIMEOUT)
+        assert r.status_code in (200, 502)
+        if r.status_code == 200:
+            data = r.json()
+            assert data.get("mode") in ("streaming", "live", "video")
+
+
+# ---------- Fingerspelling ----------
+class TestFingerspelling:
+    def test_fingerspelling_success(self, http, sample_frames):
+        payload = {"frames": sample_frames}
+        r = http.post(f"{API}/translate/fingerspelling", json=payload, timeout=TIMEOUT)
+        assert r.status_code in (200, 502), f"Unexpected status: {r.status_code}, body: {r.text[:500]}"
+        if r.status_code == 200:
+            data = r.json()
+            # Contract: id, word, letters[], detected_language, confidence, notes
+            for k in ("id", "word", "letters", "detected_language", "confidence", "notes"):
+                assert k in data, f"missing key {k} in {data}"
+            assert isinstance(data["letters"], list)
+            assert isinstance(data["word"], str)
+            # Verify persistence with mode='fingerspelling'
+            time.sleep(0.3)
+            g = http.get(f"{API}/translation/{data['id']}", timeout=30)
+            assert g.status_code == 200
+            fetched = g.json()
+            assert fetched["id"] == data["id"]
+            assert fetched["mode"] == "fingerspelling"
+
+    def test_fingerspelling_empty_returns_400(self, http):
+        r = http.post(f"{API}/translate/fingerspelling", json={"frames": []}, timeout=30)
+        assert r.status_code == 400
+
+
+# ---------- Get single translation ----------
+class TestGetTranslationById:
+    def test_get_existing_translation(self, http):
+        # Create one via text-to-sign which is reliable
+        unique = f"TEST_GETID_{uuid.uuid4().hex[:8]}"
+        r = http.post(f"{API}/translate/text-to-sign",
+                      json={"text": unique, "target_language": "LSE"},
+                      timeout=TIMEOUT)
+        assert r.status_code == 200
+        time.sleep(0.5)
+        # Look up id from history
+        h = http.get(f"{API}/history", timeout=30)
+        items = h.json()
+        target = next((it for it in items if it.get("source_text") == unique), None)
+        assert target is not None
+        target_id = target["id"]
+
+        g = http.get(f"{API}/translation/{target_id}", timeout=30)
+        assert g.status_code == 200, g.text
+        data = g.json()
+        assert data["id"] == target_id
+        assert data["mode"] == "text-to-sign"
+        assert data.get("source_text") == unique
+        # _id leak check
+        assert "_id" not in data
+
+        # Cleanup
+        http.delete(f"{API}/history/{target_id}", timeout=30)
+
+    def test_get_missing_translation_returns_404(self, http):
+        r = http.get(f"{API}/translation/does-not-exist-{uuid.uuid4().hex}", timeout=30)
+        assert r.status_code == 404
+        assert "detail" in r.json()

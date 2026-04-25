@@ -8,6 +8,8 @@ import TextToSign from "@/pages/TextToSign";
 import Dictionary from "@/pages/Dictionary";
 import HistoryPage from "@/pages/History";
 import Conversation from "@/pages/Conversation";
+import Fingerspelling from "@/pages/Fingerspelling";
+import SharePage from "@/pages/SharePage";
 
 export default function App() {
   return (
@@ -18,9 +20,11 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/traducir-en-vivo" element={<LiveTranslation />} />
             <Route path="/texto-a-signos" element={<TextToSign />} />
+            <Route path="/alfabeto" element={<Fingerspelling />} />
             <Route path="/diccionario" element={<Dictionary />} />
             <Route path="/historial" element={<HistoryPage />} />
             <Route path="/conversacion" element={<Conversation />} />
+            <Route path="/t/:id" element={<SharePage />} />
           </Route>
         </Routes>
       </BrowserRouter>
