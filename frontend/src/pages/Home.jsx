@@ -1,0 +1,209 @@
+import { Link } from "react-router-dom";
+import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import {
+  Video,
+  Type,
+  MessageSquare,
+  BookOpen,
+  History,
+  ArrowRight,
+  Sparkles,
+  Hand,
+  Smile,
+  Eye,
+} from "lucide-react";
+
+const FeatureCard = ({ to, icon: Icon, title, description, testId }) => (
+  <Link to={to} data-testid={testId} className="group">
+    <Card className="h-full p-6 border border-slate-200 bg-white hover:border-[#002FA7] hover:-translate-y-1 hover:shadow-md transition-all duration-200 rounded-xl">
+      <div className="w-10 h-10 rounded-md bg-slate-100 group-hover:bg-[#002FA7] group-hover:text-white text-slate-700 flex items-center justify-center mb-4 transition-colors duration-200">
+        <Icon className="w-5 h-5" />
+      </div>
+      <h3 className="font-display text-xl font-semibold text-slate-900 mb-1.5">
+        {title}
+      </h3>
+      <p className="text-sm text-slate-600 leading-relaxed mb-4">
+        {description}
+      </p>
+      <span className="inline-flex items-center gap-1 text-sm font-medium text-[#002FA7]">
+        Abrir <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+      </span>
+    </Card>
+  </Link>
+);
+
+export default function Home() {
+  return (
+    <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-10">
+      {/* Hero */}
+      <section className="grid lg:grid-cols-12 gap-10 items-center mb-16">
+        <div className="lg:col-span-7">
+          <Badge className="bg-slate-100 text-slate-700 hover:bg-slate-100 border-0 mb-5 font-medium">
+            <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Traducción multimodal con IA
+          </Badge>
+          <h1
+            data-testid="hero-title"
+            className="font-display text-4xl sm:text-5xl lg:text-6xl font-semibold text-slate-900 leading-[1.05] tracking-tight"
+          >
+            Traduce el lenguaje de signos{" "}
+            <span className="text-[#002FA7]">completo</span>
+            <span className="text-slate-400">.</span>
+          </h1>
+          <p className="mt-6 text-lg text-slate-600 leading-relaxed max-w-2xl">
+            No solo reconocemos las manos. Nuestra IA analiza también tus{" "}
+            <strong className="text-slate-900">labios</strong>,{" "}
+            <strong className="text-slate-900">expresiones faciales</strong> y{" "}
+            <strong className="text-slate-900">postura corporal</strong> — porque
+            así es como funciona realmente el lenguaje de signos.
+          </p>
+
+          <div className="mt-8 flex flex-wrap gap-3">
+            <Link to="/traducir-en-vivo" data-testid="cta-live">
+              <Button className="btn-ikb rounded-full px-6 h-12">
+                <Video className="w-4 h-4 mr-2" /> Empezar traducción en vivo
+              </Button>
+            </Link>
+            <Link to="/texto-a-signos" data-testid="cta-text-to-sign">
+              <Button
+                variant="outline"
+                className="rounded-full px-6 h-12 border-slate-300"
+              >
+                <Type className="w-4 h-4 mr-2" /> Texto a signos
+              </Button>
+            </Link>
+          </div>
+
+          <div className="mt-10 grid grid-cols-3 gap-4 max-w-lg">
+            <Stat icon={Hand} label="Manos" />
+            <Stat icon={Smile} label="Labios y boca" />
+            <Stat icon={Eye} label="Expresión facial" />
+          </div>
+        </div>
+
+        <div className="lg:col-span-5">
+          <div className="relative rounded-2xl overflow-hidden border border-slate-200 aspect-[4/5] bg-slate-100">
+            <img
+              src="https://images.unsplash.com/photo-1758599543122-fc551c9b4b1c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwzfHxzaWduJTIwbGFuZ3VhZ2UlMjB0cmFuc2xhdGlvbiUyMHBlcnNvbnxlbnwwfHx8fDE3NzcxNTMxNzF8MA&ixlib=rb-4.1.0&q=85"
+              alt="Persona haciendo lenguaje de signos"
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-slate-950/60 via-transparent to-transparent" />
+            <div className="absolute bottom-4 left-4 right-4 flex items-end justify-between gap-3">
+              <div className="bg-black/55 backdrop-blur-md text-white px-4 py-2 rounded-lg text-base sm:text-lg font-semibold">
+                "Hola, encantado de conocerte"
+              </div>
+              <Badge className="bg-white text-slate-900 border-0">LSE</Badge>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features grid */}
+      <section className="mb-16">
+        <div className="flex items-end justify-between mb-6">
+          <div>
+            <h2 className="font-display text-2xl sm:text-3xl font-semibold text-slate-900">
+              Todo lo que necesitas en un solo lugar
+            </h2>
+            <p className="text-slate-600 mt-1">
+              Cinco herramientas profesionales para comunicarte sin barreras.
+            </p>
+          </div>
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          <FeatureCard
+            to="/traducir-en-vivo"
+            icon={Video}
+            title="Traducir en vivo"
+            description="Activa la cámara y la IA traducirá tus señas a texto en tiempo real, considerando manos, boca y expresiones."
+            testId="feature-live"
+          />
+          <FeatureCard
+            to="/texto-a-signos"
+            icon={Type}
+            title="Texto a signos"
+            description="Escribe cualquier frase y obtén una guía paso a paso con manos, componentes orales, expresiones y postura."
+            testId="feature-text-to-sign"
+          />
+          <FeatureCard
+            to="/conversacion"
+            icon={MessageSquare}
+            title="Modo conversación"
+            description="Pantalla dividida para conversar entre signantes y oyentes en ambas direcciones, sin fricción."
+            testId="feature-conversation"
+          />
+          <FeatureCard
+            to="/diccionario"
+            icon={BookOpen}
+            title="Diccionario de signos"
+            description="Explora signos comunes en LSE, LSM, ASL y más, con descripción detallada de cada componente."
+            testId="feature-dictionary"
+          />
+          <FeatureCard
+            to="/historial"
+            icon={History}
+            title="Historial"
+            description="Revisa tus traducciones anteriores con fecha, idioma detectado y duración."
+            testId="feature-history"
+          />
+          <Card className="p-6 border border-dashed border-slate-300 bg-slate-50 rounded-xl">
+            <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 border-0 mb-3">
+              Multilenguaje
+            </Badge>
+            <h3 className="font-display text-xl font-semibold text-slate-900 mb-1.5">
+              Detección automática
+            </h3>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              Soporte para LSE, LSM, ASL, LIBRAS y otras variantes con detección
+              automática del idioma signado.
+            </p>
+          </Card>
+        </div>
+      </section>
+
+      {/* How it works */}
+      <section className="rounded-2xl bg-slate-50 border border-slate-200 p-8 sm:p-12 mb-12">
+        <div className="grid md:grid-cols-3 gap-8">
+          <Step
+            n="01"
+            title="Activa tu cámara"
+            text="Concede permisos y posiciónate frente a la cámara con buena luz."
+          />
+          <Step
+            n="02"
+            title="Sigue signando"
+            text="Manos, boca y expresiones — la IA observa todo a la vez."
+          />
+          <Step
+            n="03"
+            title="Lee la traducción"
+            text="Aparece en pantalla en tiempo real con el idioma detectado."
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+const Stat = ({ icon: Icon, label }) => (
+  <div className="flex flex-col items-start gap-2">
+    <span className="w-10 h-10 rounded-md bg-[#002FA7]/10 text-[#002FA7] flex items-center justify-center">
+      <Icon className="w-5 h-5" />
+    </span>
+    <span className="text-sm font-medium text-slate-700">{label}</span>
+  </div>
+);
+
+const Step = ({ n, title, text }) => (
+  <div>
+    <div className="font-display text-3xl text-slate-300 font-semibold">
+      {n}
+    </div>
+    <h3 className="font-display text-lg font-semibold text-slate-900 mt-1">
+      {title}
+    </h3>
+    <p className="text-sm text-slate-600 mt-1.5 leading-relaxed">{text}</p>
+  </div>
+);
