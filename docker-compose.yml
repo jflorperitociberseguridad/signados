@@ -1,0 +1,85 @@
+name: signlanguage-pro
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: sl-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - sl-net
+    # Not exposed to host — only reachable from backend on the internal network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: sl-backend
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017}
+      DB_NAME: ${DB_NAME:-signlanguage_pro}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      EMERGENT_LLM_KEY: ${EMERGENT_LLM_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_VISION_MODEL: ${LLM_VISION_MODEL:-gpt-4o}
+      LLM_TEXT_MODEL: ${LLM_TEXT_MODEL:-gpt-4o-mini}
+      MAX_VIDEO_MB: ${MAX_VIDEO_MB:-250}
+      RATE_LIMIT_TRANSLATE: ${RATE_LIMIT_TRANSLATE:-30/minute}
+      RATE_LIMIT_EVENT: ${RATE_LIMIT_EVENT:-60/minute}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://signados.cibermedida.es}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-signados.cibermedida.es,localhost,backend}
+    networks:
+      - sl-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        REACT_APP_BACKEND_URL: ${PUBLIC_URL:-https://signados.cibermedida.es}
+    container_name: sl-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - sl-net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: sl-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - sl-net
+
+volumes:
+  mongo_data:
+  caddy_data:
+  caddy_config:
+  caddy_logs:
+
+networks:
+  sl-net:
+    driver: bridge

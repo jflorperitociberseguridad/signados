@@ -1,0 +1,40 @@
+# Caddy reverse proxy with automatic Let's Encrypt HTTPS.
+#
+# Replace the email below with yours and run:
+#   docker compose up -d
+#
+# Caddy will auto-obtain & renew the SSL certificate for the domain.
+
+{
+    email admin@cibermedida.es
+}
+
+signados.cibermedida.es {
+    encode zstd gzip
+
+    # All API traffic to backend container
+    @api path /api/* /api
+    handle @api {
+        reverse_proxy backend:8001 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Everything else to the React/nginx frontend
+    handle {
+        reverse_proxy frontend:80
+    }
+
+    # Sane defaults
+    request_body {
+        max_size 300MB
+    }
+
+    log {
+        output file /var/log/caddy/access.log
+        format console
+    }
+}

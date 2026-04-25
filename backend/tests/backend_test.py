@@ -63,6 +63,19 @@ class TestHealth:
         data = r.json()
         assert data.get("service") == "SignLanguage Pro"
         assert data.get("status") == "ok"
+        assert "version" in data
+
+    def test_health_endpoint(self, http):
+        # Iteration 4: /api/health new endpoint
+        r = http.get(f"{API}/health", timeout=30)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data.get("service") == "SignLanguage Pro"
+        assert data.get("status") == "ok"
+        assert data.get("mongo") == "ok"
+        assert "llm_provider" in data
+        assert "llm_vision_model" in data
+        assert data.get("llm_key_configured") is True
 
 
 # ---------- Dictionary ----------
@@ -167,6 +180,19 @@ class TestTextToSign:
         data = r.json()
         assert data["text"] == "Gracias"
 
+    def test_text_to_sign_empty_text_422(self, http):
+        # Iteration 4: text validated 1-2000 chars
+        r = http.post(f"{API}/translate/text-to-sign", json={"text": ""}, timeout=30)
+        assert r.status_code == 422, r.text
+
+    def test_text_to_sign_too_long_422(self, http):
+        r = http.post(
+            f"{API}/translate/text-to-sign",
+            json={"text": "a" * 2001},
+            timeout=30,
+        )
+        assert r.status_code == 422, r.text
+
 
 # ---------- Video translation ----------
 class TestVideoTranslation:
@@ -188,6 +214,13 @@ class TestVideoTranslation:
             # 502 must include detail
             body = r.json()
             assert "detail" in body
+
+    def test_translate_video_undecodable_returns_400(self, http):
+        # Iteration 4: cannot decode video -> 400
+        files = {"file": ("garbage.mp4", b"this is not a real video", "video/mp4")}
+        r = http.post(f"{API}/translate/video", files=files, timeout=30)
+        assert r.status_code == 400, r.text
+        assert "detail" in r.json()
 
 
 # ---------- History ----------
@@ -261,9 +294,10 @@ class TestHistory:
         assert r.json() == []
 
     def test_delete_nonexistent_item(self, http):
+        # Iteration 4: DELETE /history/{id} now returns 404 when not found
         r = http.delete(f"{API}/history/nonexistent-id-xyz", timeout=30)
-        assert r.status_code == 200
-        assert r.json().get("deleted") == 0
+        assert r.status_code == 404
+        assert "detail" in r.json()
 
 
 # ---------- Frames translation (live/streaming via base64 frames) ----------
@@ -290,10 +324,21 @@ class TestFramesTranslation:
             assert fetched["mode"] == "streaming"
             assert fetched["translated_text"] == data["translated_text"]
 
-    def test_translate_frames_empty_returns_400(self, http):
+    def test_translate_frames_empty_returns_422(self, http):
+        # Iteration 4: Pydantic min_length=1 -> 422
         r = http.post(f"{API}/translate/frames", json={"frames": []}, timeout=30)
-        assert r.status_code == 400, r.text
-        assert "detail" in r.json()
+        assert r.status_code == 422, r.text
+
+    def test_translate_frames_too_many_returns_422(self, http, sample_frames):
+        # Iteration 4: max_length=14
+        payload = {"frames": sample_frames * 3}  # 18 frames > 14
+        r = http.post(f"{API}/translate/frames", json=payload, timeout=30)
+        assert r.status_code == 422, r.text
+
+    def test_translate_frames_short_b64_returns_422(self, http):
+        # Iteration 4: each frame must be >= 24 chars
+        r = http.post(f"{API}/translate/frames", json={"frames": ["abc"]}, timeout=30)
+        assert r.status_code == 422, r.text
 
     def test_translate_frames_default_mode(self, http, sample_frames):
         # Omit mode/duration; backend should default mode to 'streaming'
@@ -326,9 +371,10 @@ class TestFingerspelling:
             assert fetched["id"] == data["id"]
             assert fetched["mode"] == "fingerspelling"
 
-    def test_fingerspelling_empty_returns_400(self, http):
+    def test_fingerspelling_empty_returns_422(self, http):
+        # Iteration 4: Pydantic min_length=1 -> 422
         r = http.post(f"{API}/translate/fingerspelling", json={"frames": []}, timeout=30)
-        assert r.status_code == 400
+        assert r.status_code == 422
 
 
 # ---------- Get single translation ----------
@@ -413,6 +459,35 @@ class TestAnalytics:
         r = http.post(f"{API}/analytics/event", json={"data": {"x": 1}}, timeout=30)
         assert r.status_code == 422
 
+    def test_post_analytics_event_invalid_type_regex(self, http):
+        # Iteration 4: type must match ^[a-zA-Z0-9_\-.]+$
+        for bad in ["bad type", "spaces here", "with/slash", "colon:type", "★star"]:
+            r = http.post(
+                f"{API}/analytics/event",
+                json={"type": bad, "data": {}},
+                timeout=30,
+            )
+            assert r.status_code == 422, f"expected 422 for type={bad!r}, got {r.status_code} body={r.text[:200]}"
+
+    def test_post_analytics_event_too_long_type(self, http):
+        # max_length=64
+        r = http.post(
+            f"{API}/analytics/event",
+            json={"type": "a" * 65, "data": {}},
+            timeout=30,
+        )
+        assert r.status_code == 422
+
+    def test_post_analytics_event_valid_chars(self, http):
+        # Allowed chars: a-zA-Z0-9_-.
+        for good in ["a.b.c", "type_1", "TYPE-2", "x.y_z-1"]:
+            r = http.post(
+                f"{API}/analytics/event",
+                json={"type": good, "data": {}},
+                timeout=30,
+            )
+            assert r.status_code == 200, f"expected 200 for type={good!r}, got {r.status_code}"
+
     def test_summary_structure_and_keys(self, http):
         r = http.get(f"{API}/analytics/summary", params={"days": 14}, timeout=30)
         assert r.status_code == 200, r.text
@@ -475,7 +550,7 @@ class TestAnalytics:
         assert isinstance(data["totals"]["events"], int)
 
     def test_dictionary_search_records_event(self, http):
-        unique_q = f"TEST_q_{uuid.uuid4().hex[:6]}"
+        unique_q = f"test_q_{uuid.uuid4().hex[:6]}"  # backend lowercases q before recording
         # Take a baseline count
         before = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
         before_ds = before["by_type"].get("dictionary_search", 0)
@@ -492,9 +567,9 @@ class TestAnalytics:
         )
 
         # Search query should also appear in top_dictionary_searches (we used a unique q)
-        # NOTE: top_dictionary_searches is limited to 12; unique_q should be there since count==1
+        # backend lowercases q in record_event
         top = after.get("top_dictionary_searches", [])
-        assert any(it.get("q") == unique_q for it in top), top
+        assert any(it.get("q") == unique_q.lower() for it in top), top
 
     def test_dictionary_no_q_does_not_record_event(self, http):
         # Listing without q must NOT record an event

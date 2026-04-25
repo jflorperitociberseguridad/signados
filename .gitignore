@@ -31,6 +31,15 @@ dist/
 dist
 
 # Environment files (comprehensive coverage)
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+*.archive
+caddy_data/
+caddy_config/
+caddy_logs/
 
 *token.json*
 *credentials.json*
