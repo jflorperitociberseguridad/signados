@@ -37,7 +37,7 @@ export default function SignCamera({
   testIdPrefix = "cam",
   showSkeleton = true,
   motionGated = false,
-  initialOrientation = "horizontal",
+  initialOrientation = "auto",
 }) {
   const videoRef = useRef(null);
   const overlayRef = useRef(null);
@@ -57,7 +57,17 @@ export default function SignCamera({
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0);
-  const [orientation, setOrientation] = useState(initialOrientation); // horizontal | vertical
+  // auto-detect mobile to default to vertical
+  const isMobileUA =
+    typeof navigator !== "undefined" &&
+    /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const [orientation, setOrientation] = useState(
+    initialOrientation === "auto"
+      ? isMobileUA
+        ? "vertical"
+        : "horizontal"
+      : initialOrientation,
+  );
   const [facing, setFacing] = useState("user"); // user | environment
 
   const mp = useMediaPipe(videoRef, {

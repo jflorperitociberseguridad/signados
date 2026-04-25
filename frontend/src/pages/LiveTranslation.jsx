@@ -153,19 +153,19 @@ export default function LiveTranslation() {
   }
 
   return (
-    <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-8">
-      <div className="flex flex-wrap items-end justify-between gap-4 mb-5">
-        <div>
-          <h1 className="font-display text-3xl sm:text-4xl font-semibold">
+    <div className="max-w-[1400px] mx-auto px-3 sm:px-8 py-6 sm:py-8">
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-5">
+        <div className="min-w-0">
+          <h1 className="font-display text-2xl sm:text-3xl lg:text-4xl font-semibold">
             Traducción en vivo
           </h1>
-          <p className="text-slate-600 dark:text-slate-300 mt-1">
+          <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300 mt-1">
             Modo directo: la IA traduce continuamente, sin esperas.
           </p>
         </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <Label className="text-sm font-medium">Voz</Label>
+        <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+          <div className="flex items-center gap-1.5">
+            <Label className="text-xs sm:text-sm font-medium">Voz</Label>
             <Switch
               data-testid="tts-toggle"
               checked={tts}
@@ -180,10 +180,12 @@ export default function LiveTranslation() {
           <Button
             data-testid="upload-video-button"
             variant="outline"
+            size="sm"
             onClick={() => fileInput.current?.click()}
             className="border-slate-300 dark:border-slate-700"
           >
-            <Upload className="w-4 h-4 mr-2" /> Subir video
+            <Upload className="w-4 h-4 sm:mr-2" />
+            <span className="hidden sm:inline">Subir video</span>
           </Button>
           <input
             ref={fileInput}

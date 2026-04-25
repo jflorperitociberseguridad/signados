@@ -36,54 +36,54 @@ const FeatureCard = ({ to, icon: Icon, title, description, testId }) => (
 
 export default function Home() {
   return (
-    <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-10">
+    <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-8 sm:py-10">
       {/* Hero */}
-      <section className="grid lg:grid-cols-12 gap-10 items-center mb-16">
-        <div className="lg:col-span-7">
-          <Badge className="bg-slate-100 text-slate-700 hover:bg-slate-100 border-0 mb-5 font-medium">
+      <section className="grid lg:grid-cols-12 gap-8 lg:gap-10 items-center mb-12 sm:mb-16">
+        <div className="lg:col-span-7 order-2 lg:order-1">
+          <Badge className="bg-slate-100 text-slate-700 hover:bg-slate-100 border-0 mb-4 sm:mb-5 font-medium">
             <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Traducción multimodal con IA
           </Badge>
           <h1
             data-testid="hero-title"
-            className="font-display text-4xl sm:text-5xl lg:text-6xl font-semibold text-slate-900 leading-[1.05] tracking-tight"
+            className="font-display text-3xl sm:text-5xl lg:text-6xl font-semibold text-slate-900 dark:text-slate-100 leading-[1.05] tracking-tight"
           >
             Traduce el lenguaje de signos{" "}
             <span className="text-[#002FA7]">completo</span>
             <span className="text-slate-400">.</span>
           </h1>
-          <p className="mt-6 text-lg text-slate-600 leading-relaxed max-w-2xl">
+          <p className="mt-4 sm:mt-6 text-base sm:text-lg text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
             No solo reconocemos las manos. Nuestra IA analiza también tus{" "}
-            <strong className="text-slate-900">labios</strong>,{" "}
-            <strong className="text-slate-900">expresiones faciales</strong> y{" "}
-            <strong className="text-slate-900">postura corporal</strong> — porque
+            <strong className="text-slate-900 dark:text-slate-100">labios</strong>,{" "}
+            <strong className="text-slate-900 dark:text-slate-100">expresiones faciales</strong> y{" "}
+            <strong className="text-slate-900 dark:text-slate-100">postura corporal</strong> — porque
             así es como funciona realmente el lenguaje de signos.
           </p>
 
-          <div className="mt-8 flex flex-wrap gap-3">
+          <div className="mt-6 sm:mt-8 flex flex-col sm:flex-row gap-3">
             <Link to="/traducir-en-vivo" data-testid="cta-live">
-              <Button className="btn-ikb rounded-full px-6 h-12">
+              <Button className="btn-ikb rounded-full px-6 h-12 w-full sm:w-auto">
                 <Video className="w-4 h-4 mr-2" /> Empezar traducción en vivo
               </Button>
             </Link>
             <Link to="/texto-a-signos" data-testid="cta-text-to-sign">
               <Button
                 variant="outline"
-                className="rounded-full px-6 h-12 border-slate-300"
+                className="rounded-full px-6 h-12 border-slate-300 w-full sm:w-auto"
               >
                 <Type className="w-4 h-4 mr-2" /> Texto a signos
               </Button>
             </Link>
           </div>
 
-          <div className="mt-10 grid grid-cols-3 gap-4 max-w-lg">
+          <div className="mt-8 sm:mt-10 grid grid-cols-3 gap-4 max-w-lg">
             <Stat icon={Hand} label="Manos" />
             <Stat icon={Smile} label="Labios y boca" />
             <Stat icon={Eye} label="Expresión facial" />
           </div>
         </div>
 
-        <div className="lg:col-span-5">
-          <div className="relative rounded-2xl overflow-hidden border border-slate-200 aspect-[4/5] bg-slate-100">
+        <div className="lg:col-span-5 order-1 lg:order-2">
+          <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 aspect-[4/5] sm:aspect-[4/5] bg-slate-100">
             <img
               src="https://images.unsplash.com/photo-1758599543122-fc551c9b4b1c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwzfHxzaWduJTIwbGFuZ3VhZ2UlMjB0cmFuc2xhdGlvbiUyMHBlcnNvbnxlbnwwfHx8fDE3NzcxNTMxNzF8MA&ixlib=rb-4.1.0&q=85"
               alt="Persona haciendo lenguaje de signos"

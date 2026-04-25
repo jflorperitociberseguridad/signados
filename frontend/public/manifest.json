@@ -1,0 +1,49 @@
+{
+  "short_name": "SignLanguage",
+  "name": "SignLanguage Pro – Traductor de lenguaje de signos",
+  "description": "Traduce lenguaje de signos completo: manos, labios, expresiones y postura. Multilenguaje (LSE/LSM/ASL) con IA.",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#002FA7",
+  "background_color": "#FFFFFF",
+  "lang": "es",
+  "categories": ["accessibility", "productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "Traducir en vivo",
+      "url": "/traducir-en-vivo",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Texto a signos",
+      "url": "/texto-a-signos",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Diccionario",
+      "url": "/diccionario",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

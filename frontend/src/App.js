@@ -22,6 +22,13 @@ function PageTracker() {
   return null;
 }
 
+// Register service worker for PWA installability (Android/Chrome).
+if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
 export default function App() {
   return (
     <div className="App">

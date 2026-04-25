@@ -17,6 +17,17 @@ html.dark body {
     color: #f1f5f9;
 }
 
+/* iOS safe-area helpers */
+@supports (padding: env(safe-area-inset-top)) {
+    .safe-top { padding-top: env(safe-area-inset-top); }
+    .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* Prevent iOS zoom on form input focus */
+@media (max-width: 640px) {
+    input, textarea, select { font-size: 16px !important; }
+}
+
 .font-display {
     font-family: 'General Sans', 'IBM Plex Sans', sans-serif;
     letter-spacing: -0.02em;
