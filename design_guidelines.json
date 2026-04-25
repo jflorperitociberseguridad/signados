@@ -1,0 +1,119 @@
+{
+  "project_name": "SignLanguage Pro (Translador de Lenguaje de Signos)",
+  "theme": "light",
+  "archetype": "Archetype 4: Swiss & High-Contrast (Adapted for Professional Accessibility)",
+  "emotion_and_tone": "Trustworthy, Professional, Calm, Empowering, Clear. Not childish, extremely functional.",
+  "colors": {
+    "primary": "#002FA7",
+    "primary_hover": "#00227A",
+    "background": "#FFFFFF",
+    "surface": "#F8FAFC",
+    "surface_secondary": "#F1F5F9",
+    "text_main": "#0F172A",
+    "text_muted": "#475569",
+    "border": "#E2E8F0",
+    "recording_indicator": "#EF4444",
+    "success_badge": "#10B981",
+    "glass_background": "bg-white/70 backdrop-blur-xl",
+    "glass_dark_background": "bg-black/60 backdrop-blur-xl"
+  },
+  "typography": {
+    "heading_font": "General Sans",
+    "body_font": "IBM Plex Sans",
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight font-semibold text-slate-900",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-semibold text-slate-900",
+      "h3": "text-xl sm:text-2xl font-medium text-slate-800",
+      "body": "text-base leading-relaxed text-slate-700",
+      "captions": "text-sm tracking-[0.02em] text-slate-500",
+      "video_subtitles": "text-2xl sm:text-3xl md:text-4xl font-semibold text-white drop-shadow-md bg-black/40 px-4 py-2 rounded-lg"
+    }
+  },
+  "layout_and_spacing": {
+    "spacing_scale": "Generous. Use p-6 or p-8 for cards and internal sections. Avoid tight clusters.",
+    "grid_strategy": "Control Room Grid. Dashboard should use dense bento-box layouts where the main camera feed spans large areas (e.g., col-span-2 row-span-2).",
+    "surfaces": "Use flat solid backgrounds with sharp 1px borders (border-slate-200) for regular content. Use glassmorphism ONLY for floating controls over the video feed.",
+    "alignment": "Left-align forms, lists, and instructions. Center-align only the main video controls (e.g., record button, mute).",
+    "mobile_constraints": "Images and video feeds must not exceed 80vh on mobile. Use flex-col to stack video and text output cleanly on small screens."
+  },
+  "components_strategy": {
+    "html_elements": "Use standard semantic HTML elements (main, section, header, nav) as the skeleton.",
+    "shadcn_components": "Use heavily customized Shadcn components for complex interactions: Button, Card, Tabs, Input, Textarea, Badge, Table, ScrollArea.",
+    "modifications": "Tabs: override fixed heights with h-auto and text wrapping. Cards: remove generic drop shadows, use 1px border and flat background color (e.g., bg-slate-50).",
+    "video_player_ui": "The most critical UI. Must contain a large clear view of the camera. Floating bottom controls (glassmorphism: bg-black/60) with high contrast white icons. Overlaid subtitle text at the bottom. Top right should have a 'Language Detected' badge.",
+    "icons": "lucide-react. Use consistent sizing (e.g., size={24} or w-6 h-6). Crucial icons: Camera, Mic, MicOff, Video, VideoOff, History, BookOpen, MessageSquare, Hand, Languages."
+  },
+  "pages_and_features": {
+    "dashboard_home": {
+      "description": "Main control center. Shows quick actions, recent history snippet, and a 'Start Live Translation' hero section.",
+      "layout": "Bento Grid. Left side: Text inputs, translation history. Right side: Large Camera preview (always ready)."
+    },
+    "live_translation": {
+      "description": "Full-screen or large-screen video mode. Includes 'Conversation Mode' split.",
+      "layout": "Immersive video. If in conversation mode, split the view 50/50. Real-time translated text floats securely over the video feed.",
+      "spanish_ui_text": "Traducción en Vivo", "record_btn": "Iniciar Cámara", "stop_btn": "Detener"
+    },
+    "text_to_sign": {
+      "description": "Input text, and output shows step-by-step visual instructions (simulated with video placeholders or abstract illustration).",
+      "spanish_ui_text": "Texto a Signos", "placeholder": "Escribe para traducir a lenguaje de signos..."
+    },
+    "dictionary": {
+      "description": "Searchable dictionary of signs. Grid layout of cards.",
+      "layout": "Search bar on top. 3 or 4-column grid of cards with an image representing the sign, and the text label below.",
+      "spanish_ui_text": "Diccionario de Signos"
+    },
+    "history": {
+      "description": "Table view of past translations.",
+      "layout": "Shadcn Table. Columns: Fecha, Texto, Idioma, Duración.",
+      "spanish_ui_text": "Historial de Traducciones"
+    }
+  },
+  "accessibility_requirements": {
+    "contrast": "All text must pass 4.5:1 ratio. Text over video MUST have drop shadows or a semi-transparent dark background for visibility.",
+    "focus": "focus:ring-2 focus:ring-primary focus:outline-none on all interactive elements.",
+    "aria": "Use aria-labels on all icon-only buttons (e.g., aria-label='Activar cámara').",
+    "data_testid": "ALL interactive elements must have a data-testid attribute in kebab-case (e.g., data-testid='start-camera-button')."
+  },
+  "motion_and_interactions": {
+    "hover_states": "Buttons should shift to primary_hover color. Cards should elevate slightly (-translate-y-1) with a soft shadow (shadow-md) and border color darkening.",
+    "recording_state": "When recording, show a pulsing red dot (animate-pulse bg-red-500) and an active border around the video container.",
+    "transitions": "Use 'transition-all duration-200 ease-in-out' universally for smooth state changes."
+  },
+  "media_assets": {
+    "images": [
+      {
+        "category": "hero_background",
+        "url": "https://images.unsplash.com/photo-1694327876207-15246f69b411?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGJsdWUlMjB3aGl0ZSUyMHdhdmVzJTIwcHJvZmVzc2lvbmFsfGVufDB8fHx8MTc3NzE1MzE4M3ww&ixlib=rb-4.1.0&q=85",
+        "description": "Abstract blue and white waves for background or hero section filler",
+        "alt_text": "Fondo abstracto profesional azul"
+      },
+      {
+        "category": "live_video_placeholder",
+        "url": "https://images.unsplash.com/photo-1758599543122-fc551c9b4b1c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwzfHxzaWduJTIwbGFuZ3VhZ2UlMjB0cmFuc2xhdGlvbiUyMHBlcnNvbnxlbnwwfHx8fDE3NzcxNTMxNzF8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Man in glasses giving an okay sign, ideal placeholder for video feed",
+        "alt_text": "Persona haciendo lenguaje de signos"
+      },
+      {
+        "category": "conversation_mode_placeholder",
+        "url": "https://images.pexels.com/photos/23496949/pexels-photo-23496949.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Smiling businesswoman having a video call, use for conversation mode receiving end",
+        "alt_text": "Persona en videollamada"
+      },
+      {
+        "category": "dictionary_card_placeholder",
+        "url": "https://images.unsplash.com/photo-1655720358097-673f2a952cb7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwyfHxzaWduJTIwbGFuZ3VhZ2UlMjB0cmFuc2xhdGlvbiUyMHBlcnNvbnxlbnwwfHx8fDE3NzcxNTMxNzF8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Close-up of hands holding each other, ideal for dictionary sign reference",
+        "alt_text": "Referencia de signos"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Strictly adhere to the Spanish text labels for the UI.",
+    "Implement the live camera UI as the focal point, applying the Swiss High-Contrast styling (Stark White/Charcoal with International Klein Blue #002FA7 accents).",
+    "Use the video placeholders from the media_assets when simulating the 'Live' state.",
+    "Create the specific views requested: Dashboard, Live Translation, Text-to-Sign, Sign Dictionary, and History.",
+    "Prioritize accessibility: include 'data-testid' on all interactive elements, ensure high contrast over video feeds using semi-transparent dark overlays for subtitles.",
+    "Include a prominent 'Language Detector' UI element (like a Shadcn Badge) in the video view (e.g., 'Detectando...' or 'LSE Detectado').",
+    "Ensure the fonts 'General Sans' and 'IBM Plex Sans' are imported and used via Tailwind configuration."
+  ]
+}
