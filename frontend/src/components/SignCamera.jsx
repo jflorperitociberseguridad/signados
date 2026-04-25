@@ -9,23 +9,20 @@ import {
   AlertTriangle,
   RadioTower,
   Zap,
+  RefreshCw,
+  Smartphone,
+  Monitor,
+  Activity,
 } from "lucide-react";
+import { useMediaPipe, drawLandmarks } from "../hooks/useMediaPipe";
 
 /**
- * SignCamera — webcam capture supporting:
- *  - Manual record (click to start/stop a single clip)
- *  - Live clip mode (auto re-record every clipDuration seconds, NON-BLOCKING)
- *  - Streaming mode (capture jpeg frames every 400ms and ship batches)
- *
- * Props:
+ * SignCamera with:
  *  - mode: "manual" | "live" | "streaming"
- *  - clipDuration: seconds per auto clip (live mode)
- *  - frameRateMs: ms between captured frames (streaming mode, default 400)
- *  - batchEvery: number of frames per batch sent to onFramesReady (streaming)
- *  - onClipReady(blob, durationSec)         (manual + live)
- *  - onFramesReady(framesBase64Array, durationSec)  (streaming)
- *  - statusText, detectedLanguage, busy
- *  - testIdPrefix
+ *  - orientation: "horizontal" (16:9) | "vertical" (9:16, half-body)
+ *  - facing: "user" | "environment" (flip)
+ *  - showSkeleton (MediaPipe overlay)
+ *  - motionGated: only deliver clips/frames when MediaPipe detects movement
  */
 export default function SignCamera({
   mode = "manual",
@@ -38,9 +35,13 @@ export default function SignCamera({
   detectedLanguage = "",
   busy = false,
   testIdPrefix = "cam",
+  showSkeleton = true,
+  motionGated = false,
+  initialOrientation = "horizontal",
 }) {
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
+  const overlayRef = useRef(null);
+  const captureCanvasRef = useRef(null);
   const streamRef = useRef(null);
   const recorderRef = useRef(null);
   const chunksRef = useRef([]);
@@ -49,11 +50,41 @@ export default function SignCamera({
   const frameTimerRef = useRef(null);
   const framesBufRef = useRef([]);
   const batchStartRef = useRef(0);
+  const movingRef = useRef(false);
+  const drawRafRef = useRef(null);
 
   const [cameraOn, setCameraOn] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0);
+  const [orientation, setOrientation] = useState(initialOrientation); // horizontal | vertical
+  const [facing, setFacing] = useState("user"); // user | environment
+
+  const mp = useMediaPipe(videoRef, {
+    enabled: cameraOn && showSkeleton,
+    onMotion: (v) => {
+      movingRef.current = v;
+    },
+  });
+
+  // overlay draw loop (runs alongside MediaPipe detection loop)
+  useEffect(() => {
+    if (!cameraOn || !showSkeleton) return;
+    const tick = () => {
+      const v = videoRef.current;
+      const c = overlayRef.current;
+      if (v && c && v.videoWidth) {
+        if (c.width !== v.videoWidth) c.width = v.videoWidth;
+        if (c.height !== v.videoHeight) c.height = v.videoHeight;
+        drawLandmarks(c, mp.landmarks, { mirror: facing === "user" });
+      }
+      drawRafRef.current = requestAnimationFrame(tick);
+    };
+    drawRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
+    };
+  }, [cameraOn, showSkeleton, mp.landmarks, facing]);
 
   useEffect(() => {
     return () => stopAll();
@@ -66,28 +97,52 @@ export default function SignCamera({
       t = setInterval(() => {
         setElapsed(((Date.now() - startTimeRef.current) / 1000).toFixed(1));
       }, 100);
-    } else {
-      setElapsed(0);
-    }
+    } else setElapsed(0);
     return () => clearInterval(t);
   }, [recording]);
 
+  // restart camera when orientation/facing changes
+  useEffect(() => {
+    if (!cameraOn) return;
+    restartStream();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orientation, facing]);
+
   async function startCamera() {
     setError("");
+    await openStream();
+  }
+
+  async function openStream() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: 1280, height: 720 },
+      const isVertical = orientation === "vertical";
+      const constraints = {
+        video: {
+          facingMode: facing,
+          width: { ideal: isVertical ? 720 : 1280 },
+          height: { ideal: isVertical ? 1280 : 720 },
+          aspectRatio: isVertical ? 9 / 16 : 16 / 9,
+        },
         audio: false,
-      });
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
       setCameraOn(true);
-    } catch (e) {
+    } catch {
       setError("No se pudo acceder a la cámara. Concede permisos en tu navegador.");
     }
+  }
+
+  async function restartStream() {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    await openStream();
   }
 
   function stopCamera() {
@@ -110,15 +165,8 @@ export default function SignCamera({
   }
 
   function pickMime() {
-    const candidates = [
-      "video/webm;codecs=vp9",
-      "video/webm;codecs=vp8",
-      "video/webm",
-      "video/mp4",
-    ];
-    for (const m of candidates) {
-      if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
-    }
+    const c = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+    for (const m of c) if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
     return "";
   }
 
@@ -127,10 +175,7 @@ export default function SignCamera({
     const mime = pickMime();
     chunksRef.current = [];
     try {
-      const rec = new MediaRecorder(
-        streamRef.current,
-        mime ? { mimeType: mime } : undefined,
-      );
+      const rec = new MediaRecorder(streamRef.current, mime ? { mimeType: mime } : undefined);
       recorderRef.current = rec;
       rec.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
@@ -139,7 +184,10 @@ export default function SignCamera({
         const type = mime || "video/webm";
         const blob = new Blob(chunksRef.current, { type });
         const dur = (Date.now() - startTimeRef.current) / 1000;
-        if (blob.size > 0 && onClipReady) onClipReady(blob, dur);
+        if (blob.size > 0 && onClipReady) {
+          if (motionGated && !movingRef.current) return; // skip empty clip
+          onClipReady(blob, dur);
+        }
       };
       startTimeRef.current = Date.now();
       rec.start();
@@ -155,26 +203,25 @@ export default function SignCamera({
     setRecording(false);
   }
 
-  // ---------- Streaming (image frames) ----------
   function captureFrame() {
     const video = videoRef.current;
     if (!video || video.readyState < 2) return;
-    const canvas = canvasRef.current || document.createElement("canvas");
-    canvasRef.current = canvas;
-    const w = 480;
+    const canvas = captureCanvasRef.current || document.createElement("canvas");
+    captureCanvasRef.current = canvas;
+    const w = orientation === "vertical" ? 360 : 480;
     const h = Math.round((video.videoHeight / video.videoWidth) * w) || 360;
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(video, 0, 0, w, h);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
-    const b64 = dataUrl.split(",")[1];
-    framesBufRef.current.push(b64);
+    framesBufRef.current.push(dataUrl.split(",")[1]);
 
     if (framesBufRef.current.length >= batchEvery) {
       const batch = framesBufRef.current.splice(0, framesBufRef.current.length);
       const dur = (Date.now() - batchStartRef.current) / 1000;
       batchStartRef.current = Date.now();
+      if (motionGated && !movingRef.current) return; // skip empty batch
       onFramesReady && onFramesReady(batch, dur);
     }
   }
@@ -196,35 +243,28 @@ export default function SignCamera({
     setRecording(false);
   }
 
-  // ---------- Mode controllers ----------
-  // Live clip mode: continuously record clips of clipDuration. Non-blocking.
+  // live cycle (non-blocking)
   useEffect(() => {
     if (mode !== "live" || !cameraOn) return;
     let cancelled = false;
-
     const cycle = () => {
       if (cancelled || !streamRef.current) return;
       startRecording();
       liveTimerRef.current = setTimeout(() => {
         stopRecording();
-        // restart immediately (do not wait for previous clip processing)
         liveTimerRef.current = setTimeout(cycle, 80);
       }, clipDuration * 1000);
     };
     cycle();
-
     return () => {
       cancelled = true;
-      if (liveTimerRef.current) {
-        clearTimeout(liveTimerRef.current);
-        liveTimerRef.current = null;
-      }
+      if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
       stopRecording();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, cameraOn, clipDuration]);
 
-  // Streaming mode
+  // streaming mode
   useEffect(() => {
     if (mode !== "streaming" || !cameraOn) return;
     startFrameCapture();
@@ -232,20 +272,33 @@ export default function SignCamera({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, cameraOn, frameRateMs, batchEvery]);
 
+  const isVertical = orientation === "vertical";
+
   return (
     <div
       data-testid={`${testIdPrefix}-container`}
-      className={`relative aspect-video w-full overflow-hidden rounded-2xl border ${
-        recording ? "border-red-400 recording-ring" : "border-slate-200"
-      } bg-slate-950`}
+      className={`relative w-full overflow-hidden rounded-2xl border ${
+        recording ? "border-red-400 recording-ring" : "border-slate-200 dark:border-slate-700"
+      } bg-slate-950 mx-auto ${isVertical ? "aspect-[9/16] max-w-md" : "aspect-video"}`}
     >
       <video
         ref={videoRef}
         playsInline
         muted
         data-testid={`${testIdPrefix}-video`}
-        className="absolute inset-0 w-full h-full object-cover [transform:scaleX(-1)]"
+        className={`absolute inset-0 w-full h-full object-cover ${
+          facing === "user" ? "[transform:scaleX(-1)]" : ""
+        }`}
       />
+
+      {showSkeleton && cameraOn && (
+        <canvas
+          ref={overlayRef}
+          data-testid={`${testIdPrefix}-skeleton`}
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          style={{ mixBlendMode: "screen" }}
+        />
+      )}
 
       {!cameraOn && (
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-white p-8 bg-gradient-to-b from-slate-900 to-slate-950">
@@ -257,6 +310,30 @@ export default function SignCamera({
             Activa tu cámara para que la IA pueda interpretar tus señas, gestos
             de la boca y expresiones faciales.
           </p>
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={() => setOrientation("horizontal")}
+              data-testid={`${testIdPrefix}-set-horizontal`}
+              className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5 transition-colors ${
+                orientation === "horizontal"
+                  ? "bg-[#002FA7] text-white"
+                  : "bg-white/10 text-white/80 hover:bg-white/20"
+              }`}
+            >
+              <Monitor className="w-3.5 h-3.5" /> Horizontal
+            </button>
+            <button
+              onClick={() => setOrientation("vertical")}
+              data-testid={`${testIdPrefix}-set-vertical`}
+              className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5 transition-colors ${
+                orientation === "vertical"
+                  ? "bg-[#002FA7] text-white"
+                  : "bg-white/10 text-white/80 hover:bg-white/20"
+              }`}
+            >
+              <Smartphone className="w-3.5 h-3.5" /> Vertical
+            </button>
+          </div>
           <Button
             data-testid={`${testIdPrefix}-start-camera-button`}
             onClick={startCamera}
@@ -298,20 +375,49 @@ export default function SignCamera({
                 <Zap className="w-3 h-3 mr-1" /> Streaming
               </Badge>
             )}
+            {showSkeleton && mp.ready && (
+              <Badge className="bg-emerald-500/90 text-white border-0">
+                <Activity className="w-3 h-3 mr-1" /> MediaPipe
+              </Badge>
+            )}
             {busy && (
               <Badge className="bg-black/60 text-white border-0 backdrop-blur-md">
                 <Loader2 className="w-3 h-3 mr-1 animate-spin" /> Analizando…
               </Badge>
             )}
+            {motionGated && (
+              <Badge
+                className={`border-0 ${
+                  movingRef.current
+                    ? "bg-emerald-500/90 text-white"
+                    : "bg-black/60 text-white/80 backdrop-blur-md"
+                }`}
+              >
+                {movingRef.current ? "Movimiento ✓" : "Sin movimiento"}
+              </Badge>
+            )}
           </div>
-          {detectedLanguage && (
-            <Badge
-              data-testid={`${testIdPrefix}-lang-badge`}
-              className="bg-white/90 text-slate-900 border-0 backdrop-blur-md"
+          <div className="flex items-center gap-2">
+            {detectedLanguage && (
+              <Badge
+                data-testid={`${testIdPrefix}-lang-badge`}
+                className="bg-white/90 text-slate-900 border-0 backdrop-blur-md"
+              >
+                {detectedLanguage}
+              </Badge>
+            )}
+            <button
+              data-testid={`${testIdPrefix}-flip-button`}
+              onClick={() =>
+                setFacing((f) => (f === "user" ? "environment" : "user"))
+              }
+              className="p-2 rounded-full bg-black/55 text-white hover:bg-black/75 backdrop-blur-md transition-all duration-200"
+              aria-label="Cambiar cámara"
+              title="Cambiar cámara"
             >
-              {detectedLanguage}
-            </Badge>
-          )}
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -327,7 +433,28 @@ export default function SignCamera({
       )}
 
       {cameraOn && (
-        <div className="absolute left-0 right-0 bottom-4 flex items-center justify-center gap-3 z-10">
+        <div className="absolute left-0 right-0 bottom-4 flex items-center justify-center gap-3 z-10 px-3 flex-wrap">
+          <button
+            data-testid={`${testIdPrefix}-orientation-toggle`}
+            onClick={() =>
+              setOrientation((o) =>
+                o === "horizontal" ? "vertical" : "horizontal",
+              )
+            }
+            className="px-3 py-2 rounded-full bg-black/55 text-white hover:bg-black/75 backdrop-blur-md text-xs flex items-center gap-1.5"
+            title="Cambiar orientación"
+          >
+            {isVertical ? (
+              <>
+                <Monitor className="w-3.5 h-3.5" /> Horizontal
+              </>
+            ) : (
+              <>
+                <Smartphone className="w-3.5 h-3.5" /> Vertical
+              </>
+            )}
+          </button>
+
           {mode === "manual" && !recording && (
             <Button
               data-testid={`${testIdPrefix}-record-button`}

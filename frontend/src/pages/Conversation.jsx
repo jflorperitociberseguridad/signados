@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Textarea } from "../components/ui/textarea";
 import { translateVideo, textToSign } from "../lib/api";
+import { exportConversationPDF } from "../lib/pdf";
 import { toast } from "sonner";
 import {
   Loader2,
@@ -13,6 +14,7 @@ import {
   Hand,
   Smile,
   Eye,
+  FileDown,
 } from "lucide-react";
 
 export default function Conversation() {
@@ -74,18 +76,41 @@ export default function Conversation() {
 
   return (
     <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-8">
-      <div className="flex items-start gap-3 mb-6">
-        <span className="w-10 h-10 rounded-md bg-[#002FA7] text-white flex items-center justify-center shrink-0">
-          <MessageSquare className="w-5 h-5" />
-        </span>
-        <div>
-          <h1 className="font-display text-3xl sm:text-4xl font-semibold text-slate-900">
-            Modo conversación
-          </h1>
-          <p className="text-slate-600 mt-1">
-            Comunicación bidireccional entre persona signante y persona oyente.
-          </p>
+      <div className="flex items-start justify-between gap-3 mb-6">
+        <div className="flex items-start gap-3">
+          <span className="w-10 h-10 rounded-md bg-[#002FA7] text-white flex items-center justify-center shrink-0">
+            <MessageSquare className="w-5 h-5" />
+          </span>
+          <div>
+            <h1 className="font-display text-3xl sm:text-4xl font-semibold text-slate-900 dark:text-slate-100">
+              Modo conversación
+            </h1>
+            <p className="text-slate-600 dark:text-slate-300 mt-1">
+              Comunicación bidireccional entre persona signante y persona
+              oyente.
+            </p>
+          </div>
         </div>
+        {messages.length > 0 && (
+          <Button
+            data-testid="conv-export-pdf"
+            variant="outline"
+            onClick={() =>
+              exportConversationPDF(
+                messages.map((m) => ({
+                  from: m.from,
+                  text: m.text,
+                  lang: m.lang,
+                  summary: m.summary,
+                  ts: new Date().toLocaleTimeString(),
+                })),
+              )
+            }
+            className="border-slate-300 dark:border-slate-700"
+          >
+            <FileDown className="w-4 h-4 mr-2" /> Exportar PDF
+          </Button>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">

@@ -10,8 +10,9 @@ import {
   TableHeader,
   TableRow,
 } from "../components/ui/table";
-import { History as HistoryIcon, Trash2, Loader2 } from "lucide-react";
+import { History as HistoryIcon, Trash2, Loader2, FileDown } from "lucide-react";
 import { getHistory, deleteHistoryItem, clearHistory } from "../lib/api";
+import { exportConversationPDF } from "../lib/pdf";
 import { toast } from "sonner";
 
 const fmt = (iso) => {
@@ -76,14 +77,35 @@ export default function HistoryPage() {
           </div>
         </div>
         {items.length > 0 && (
-          <Button
-            data-testid="history-clear-button"
-            variant="outline"
-            onClick={handleClear}
-            className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
-          >
-            <Trash2 className="w-4 h-4 mr-2" /> Borrar todo
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              data-testid="history-export-pdf"
+              variant="outline"
+              onClick={() =>
+                exportConversationPDF(
+                  items.map((it) => ({
+                    from: it.mode === "text-to-sign" ? "user" : "signer",
+                    text: it.translated_text,
+                    lang: it.detected_language,
+                    ts: new Date(it.created_at).toLocaleString(),
+                    summary: it.notes,
+                  })),
+                  { title: "Historial – SignLanguage Pro" },
+                )
+              }
+              className="border-slate-300 dark:border-slate-700"
+            >
+              <FileDown className="w-4 h-4 mr-2" /> Exportar PDF
+            </Button>
+            <Button
+              data-testid="history-clear-button"
+              variant="outline"
+              onClick={handleClear}
+              className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+            >
+              <Trash2 className="w-4 h-4 mr-2" /> Borrar todo
+            </Button>
+          </div>
         )}
       </div>
 
