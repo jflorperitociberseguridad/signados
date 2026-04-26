@@ -203,33 +203,68 @@ export function drawLandmarks(canvas, landmarks, { mirror = true, color = "#3B82
     }
   };
 
-  // Pose
+  // Pose: include head/face connections + body + arms + torso
   const POSE_CONN = [
-    [11, 13], [13, 15],
-    [12, 14], [14, 16],
+    // Face mini connections (visible head)
+    [0, 1], [1, 2], [2, 3], [3, 7],
+    [0, 4], [4, 5], [5, 6], [6, 8],
+    [9, 10],
+    // Arms
+    [11, 13], [13, 15], [15, 17], [15, 19], [15, 21], [17, 19],
+    [12, 14], [14, 16], [16, 18], [16, 20], [16, 22], [18, 20],
+    // Shoulders + torso
     [11, 12], [11, 23], [12, 24], [23, 24],
+    // Legs (lightly drawn)
+    [23, 25], [24, 26],
   ];
-  drawConnections(landmarks.pose, POSE_CONN, "rgba(16, 185, 129, 0.85)", 3);
+  drawConnections(landmarks.pose, POSE_CONN, "rgba(16, 185, 129, 0.95)", 3.5);
   drawPoints(
-    landmarks.pose ? landmarks.pose.slice(11, 25) : null,
-    3,
+    landmarks.pose ? landmarks.pose.slice(0, 27) : null,
+    3.5,
     "#10b981",
   );
 
-  // Face (only outline + eyes + lips for performance)
+  // Face: oval contour + eyebrows + eyes + nose + lips
   if (landmarks.face) {
-    const lipsIdx = [
-      61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291,
-      308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 78,
+    const FACE_OVAL = [
+      10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+      397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+      172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10,
     ];
-    ctx.fillStyle = "rgba(244, 114, 182, 0.9)";
-    for (const i of lipsIdx) {
-      const p = landmarks.face[i];
-      if (!p) continue;
+    const RIGHT_EYE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 33];
+    const LEFT_EYE = [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466, 263];
+    const RIGHT_BROW = [70, 63, 105, 66, 107];
+    const LEFT_BROW = [336, 296, 334, 293, 300];
+    const NOSE = [168, 6, 197, 195, 5, 4, 1, 19, 94, 2];
+    const LIPS_OUTER = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61];
+    const LIPS_INNER = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312, 13, 82, 81, 80, 191, 78];
+
+    const drawPolyline = (idx, stroke, lw) => {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = lw;
       ctx.beginPath();
-      ctx.arc(p.x * w, p.y * h, 1.6, 0, 2 * Math.PI);
-      ctx.fill();
-    }
+      let started = false;
+      for (const i of idx) {
+        const p = landmarks.face[i];
+        if (!p) continue;
+        if (!started) {
+          ctx.moveTo(p.x * w, p.y * h);
+          started = true;
+        } else {
+          ctx.lineTo(p.x * w, p.y * h);
+        }
+      }
+      ctx.stroke();
+    };
+
+    drawPolyline(FACE_OVAL, "rgba(167, 139, 250, 0.9)", 2);
+    drawPolyline(RIGHT_EYE, "rgba(56, 189, 248, 1)", 1.8);
+    drawPolyline(LEFT_EYE, "rgba(56, 189, 248, 1)", 1.8);
+    drawPolyline(RIGHT_BROW, "rgba(244, 114, 182, 1)", 2);
+    drawPolyline(LEFT_BROW, "rgba(244, 114, 182, 1)", 2);
+    drawPolyline(NOSE, "rgba(167, 139, 250, 0.85)", 1.6);
+    drawPolyline(LIPS_OUTER, "rgba(239, 68, 68, 1)", 2.2);
+    drawPolyline(LIPS_INNER, "rgba(239, 68, 68, 0.9)", 1.6);
   }
 
   // Hands

@@ -13,6 +13,8 @@ import {
   Smartphone,
   Monitor,
   Activity,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { useMediaPipe, drawLandmarks } from "../hooks/useMediaPipe";
 
@@ -69,6 +71,7 @@ export default function SignCamera({
       : initialOrientation,
   );
   const [facing, setFacing] = useState("user"); // user | environment
+  const [zoom, setZoom] = useState(1); // 0.5..2 (visual CSS scale)
 
   const mp = useMediaPipe(videoRef, {
     enabled: cameraOn && showSkeleton,
@@ -291,24 +294,34 @@ export default function SignCamera({
         recording ? "border-red-400 recording-ring" : "border-slate-200 dark:border-slate-700"
       } bg-slate-950 mx-auto ${isVertical ? "aspect-[9/16] max-w-md" : "aspect-video"}`}
     >
-      <video
-        ref={videoRef}
-        playsInline
-        muted
-        data-testid={`${testIdPrefix}-video`}
-        className={`absolute inset-0 w-full h-full object-cover ${
-          facing === "user" ? "[transform:scaleX(-1)]" : ""
-        }`}
-      />
-
-      {showSkeleton && cameraOn && (
-        <canvas
-          ref={overlayRef}
-          data-testid={`${testIdPrefix}-skeleton`}
-          className="absolute inset-0 w-full h-full pointer-events-none"
-          style={{ mixBlendMode: "screen" }}
+      {/* Zoom-able layer: contains video + overlay so they stay aligned */}
+      <div
+        data-testid={`${testIdPrefix}-zoom-layer`}
+        className="absolute inset-0"
+        style={{
+          transform: `scale(${zoom})`,
+          transformOrigin: "center center",
+          transition: "transform 200ms ease-out",
+        }}
+      >
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          data-testid={`${testIdPrefix}-video`}
+          className={`absolute inset-0 w-full h-full object-cover ${
+            facing === "user" ? "[transform:scaleX(-1)]" : ""
+          }`}
         />
-      )}
+
+        {showSkeleton && cameraOn && (
+          <canvas
+            ref={overlayRef}
+            data-testid={`${testIdPrefix}-skeleton`}
+            className="absolute inset-0 w-full h-full pointer-events-none"
+          />
+        )}
+      </div>
 
       {!cameraOn && (
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-white p-8 bg-gradient-to-b from-slate-900 to-slate-950">
@@ -417,6 +430,26 @@ export default function SignCamera({
               </Badge>
             )}
             <button
+              data-testid={`${testIdPrefix}-zoom-out`}
+              onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)))}
+              disabled={zoom <= 0.5}
+              className="p-2 rounded-full bg-black/55 text-white hover:bg-black/75 backdrop-blur-md transition-all duration-200 disabled:opacity-40"
+              aria-label="Alejar"
+              title="Alejar (zoom out)"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
+            <button
+              data-testid={`${testIdPrefix}-zoom-in`}
+              onClick={() => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)))}
+              disabled={zoom >= 2}
+              className="p-2 rounded-full bg-black/55 text-white hover:bg-black/75 backdrop-blur-md transition-all duration-200 disabled:opacity-40"
+              aria-label="Acercar"
+              title="Acercar (zoom in)"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
+            <button
               data-testid={`${testIdPrefix}-flip-button`}
               onClick={() =>
                 setFacing((f) => (f === "user" ? "environment" : "user"))
@@ -439,6 +472,50 @@ export default function SignCamera({
           >
             {statusText}
           </div>
+        </div>
+      )}
+
+      {/* Vertical zoom slider on the right edge (visible on cam-on state) */}
+      {cameraOn && (
+        <div
+          data-testid={`${testIdPrefix}-zoom-slider`}
+          className="absolute right-3 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center gap-2 bg-black/55 backdrop-blur-md rounded-full px-2 py-3"
+        >
+          <button
+            onClick={() => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)))}
+            disabled={zoom >= 2}
+            className="text-white hover:bg-white/10 rounded-full p-1 disabled:opacity-40"
+            aria-label="Acercar"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+          </button>
+          <input
+            type="range"
+            min="0.5"
+            max="2"
+            step="0.05"
+            value={zoom}
+            onChange={(e) => setZoom(parseFloat(e.target.value))}
+            className="h-24 cursor-pointer accent-white"
+            style={{
+              writingMode: "vertical-lr",
+              WebkitAppearance: "slider-vertical",
+              direction: "rtl",
+              width: 16,
+            }}
+            aria-label="Nivel de zoom"
+          />
+          <button
+            onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)))}
+            disabled={zoom <= 0.5}
+            className="text-white hover:bg-white/10 rounded-full p-1 disabled:opacity-40"
+            aria-label="Alejar"
+          >
+            <ZoomOut className="w-3.5 h-3.5" />
+          </button>
+          <span className="text-[10px] text-white/80 font-mono tabular-nums">
+            {Math.round(zoom * 100)}%
+          </span>
         </div>
       )}
 
