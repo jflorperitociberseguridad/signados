@@ -57,16 +57,19 @@ export function ConnectivityPill() {
       {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
       {online ? "En línea" : "Modo offline"}
       {pack ? (
-        <button
-          type="button"
-          onClick={refresh}
-          disabled={loading || !online}
-          className="ml-1 underline-offset-2 hover:underline disabled:opacity-50"
-          title={lastUpdated ? `Actualizado: ${new Date(lastUpdated).toLocaleString()}` : ""}
-          data-testid="offline-refresh"
-        >
-          {loading ? "Sincronizando…" : `${pack.count} signos`}
-        </button>
+        <>
+          <span aria-hidden className="opacity-50">·</span>
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={loading || !online}
+            className="underline-offset-2 hover:underline disabled:opacity-50"
+            title={lastUpdated ? `Actualizado: ${new Date(lastUpdated).toLocaleString()}` : ""}
+            data-testid="offline-refresh"
+          >
+            {loading ? "Sincronizando…" : `${pack.count} signos`}
+          </button>
+        </>
       ) : null}
     </div>
   );

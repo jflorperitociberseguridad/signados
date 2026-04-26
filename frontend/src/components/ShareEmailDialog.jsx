@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -80,6 +81,9 @@ export default function ShareEmailDialog({
       <DialogContent data-testid="share-email-dialog">
         <DialogHeader>
           <DialogTitle>Enviar traducción por email</DialogTitle>
+          <DialogDescription>
+            Envía esta traducción de lengua de signos a otra persona por correo electrónico.
+          </DialogDescription>
         </DialogHeader>
         {!configured && (
           <p className="text-xs text-amber-700 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200 dark:border-amber-900 rounded-md px-3 py-2">
