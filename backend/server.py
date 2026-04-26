@@ -866,31 +866,44 @@ async def billing_checkout(request: Request, payload: CheckoutCreateRequest):
 
 @api_router.get("/billing/status/{session_id}")
 async def billing_status(session_id: str):
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=503, detail="Stripe no configurado")
-    sc = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url="")
-    try:
-        st = await sc.get_checkout_status(session_id)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
-    # Update tx atomically (only if not already paid)
+    """Return Stripe checkout status; fall back to local DB record if Stripe
+    can't find the session (sentinel test keys, expired, etc.)."""
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
-    if tx and tx.get("payment_status") != "paid":
-        await db.payment_transactions.update_one(
-            {"session_id": session_id},
-            {"$set": {
+    if not tx:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if STRIPE_API_KEY:
+        try:
+            sc = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url="")
+            st = await sc.get_checkout_status(session_id)
+            if tx.get("payment_status") != "paid":
+                await db.payment_transactions.update_one(
+                    {"session_id": session_id},
+                    {"$set": {
+                        "status": st.status,
+                        "payment_status": st.payment_status,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                if st.payment_status == "paid":
+                    asyncio.create_task(record_event("checkout_paid", {"package": tx.get("package_id")}))
+            return {
                 "status": st.status,
                 "payment_status": st.payment_status,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }},
-        )
-        if st.payment_status == "paid":
-            asyncio.create_task(record_event("checkout_paid", {"package": tx.get("package_id")}))
+                "amount_total": st.amount_total,
+                "currency": st.currency,
+                "source": "stripe",
+            }
+        except Exception as exc:
+            logger.warning("Stripe status retrieval failed (%s); falling back to DB", exc)
+
+    # Fallback: local record only (webhook will update payment_status when triggered)
     return {
-        "status": st.status,
-        "payment_status": st.payment_status,
-        "amount_total": st.amount_total,
-        "currency": st.currency,
+        "status": tx.get("status", "open"),
+        "payment_status": tx.get("payment_status", "unpaid"),
+        "amount_total": int(round((tx.get("amount") or 0) * 100)),
+        "currency": tx.get("currency", "eur"),
+        "source": "local",
     }
 
 
@@ -1021,12 +1034,21 @@ async def _check_api_key(request: Request) -> dict:
     doc = await db.api_keys.find_one({"key": api_key, "active": True}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=401, detail="Invalid API key")
+    today = datetime.now(timezone.utc).date().isoformat()
+    # Daily reset
+    if doc.get("usage_date") != today:
+        await db.api_keys.update_one(
+            {"key": api_key},
+            {"$set": {"usage_today": 0, "usage_date": today}},
+        )
+        doc["usage_today"] = 0
     if doc.get("usage_today", 0) >= doc.get("daily_limit", 1000):
         raise HTTPException(status_code=429, detail="Daily limit reached")
     await db.api_keys.update_one(
         {"key": api_key},
         {"$inc": {"usage_today": 1, "usage_total": 1},
-         "$set": {"last_used_at": datetime.now(timezone.utc).isoformat()}},
+         "$set": {"last_used_at": datetime.now(timezone.utc).isoformat(),
+                  "usage_date": today}},
     )
     return doc
 
