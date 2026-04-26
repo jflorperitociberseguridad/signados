@@ -18,6 +18,8 @@ import CommunitySign from "@/pages/CommunitySign";
 import Pricing from "@/pages/Pricing";
 import Admin from "@/pages/Admin";
 import AvatarSign from "@/pages/AvatarSign";
+import VideoCall from "@/pages/VideoCall";
+import OfflineIndicator from "@/components/OfflineIndicator";
 import { trackEvent } from "@/lib/api";
 
 function PageTracker() {
@@ -53,6 +55,7 @@ export default function App() {
             <Route path="/quiz" element={<Quiz />} />
             <Route path="/comunidad" element={<CommunitySign />} />
             <Route path="/avatar" element={<AvatarSign />} />
+            <Route path="/llamada" element={<VideoCall />} />
             <Route path="/precios" element={<Pricing />} />
             <Route path="/admin" element={<Admin />} />
             <Route path="/analytics" element={<Analytics />} />
@@ -60,6 +63,7 @@ export default function App() {
           </Route>
         </Routes>
       </BrowserRouter>
+      <OfflineIndicator />
       <Toaster richColors position="top-right" />
     </div>
   );

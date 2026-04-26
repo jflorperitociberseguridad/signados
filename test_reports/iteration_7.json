@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 7 - Phase 2 Block B (WebRTC video calls + PWA offline + Resend email graceful no-op) tested end-to-end. Created /app/backend/tests/test_iter7_phase2_block_b.py with 15 tests covering health, /api/email/status (configured=false), /api/email/share graceful no-op, /api/rtc/{room,ice,stats}, WebSocket /api/rtc/{room} 2-peer signaling (peer-joined, offer, answer, subtitle), /api/offline/pack default 30, and regressions on text-to-sign, dictionary, history, billing/plans, admin/login. ALL 15/15 backend tests pass. Frontend e2e (browser automation) verified: home feature-call card, nav-call link, /llamada Generar código produces valid 6-char alnum code (e.g. 7SCEHJ) and share URL, /diccionario connectivity pill shows 'En línea', History page Mail icon opens ShareEmailDialog with share-email-to input (no crash on submit, toast expected to say email not configured), /sw.js returns 200, all 7 regression pages (/, /traducir-en-vivo, /texto-a-signos, /diccionario, /admin, /precios, /avatar) return 200.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "VideoCall.jsx (/llamada)", "issue": "Missing data-testid='rtc-create-card' and data-testid='rtc-join-card' on the two card WRAPPERS. Only the inner controls (rtc-create-button, rtc-room-input, rtc-role-listener, rtc-role-signer, rtc-join-button) currently carry test-ids. Inner controls all work; cards just need the requested wrapper test-ids for completeness with the spec.", "selector": "[data-testid=rtc-create-card], [data-testid=rtc-join-card]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "ShareEmailDialog (and possibly other Dialogs)", "issues": ["Radix DialogContent emits a11y warning: 'Missing Description or aria-describedby={undefined} for {DialogContent}'. Add a <DialogDescription> (or aria-describedby={undefined} explicitly) inside ShareEmailDialog to silence the warning and improve screen-reader UX."]},
+      {"screen": "/diccionario ConnectivityPill", "issues": ["Pill text renders as 'En línea30 signos' with no separator between status and cache count. Consider a small gap/dot between the two pieces (e.g., 'En línea · 30 signos') for readability."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter7_phase2_block_b.py",
+    "/app/test_reports/pytest/iter7_results.xml"
+  ],
+  "action_items": [
+    "Add data-testid='rtc-create-card' to the 'Crear sala' Card and data-testid='rtc-join-card' to the 'Unirse a sala' Card in /app/frontend/src/pages/VideoCall.jsx.",
+    "Add a <DialogDescription> (or aria-describedby) inside /app/frontend/src/components/ShareEmailDialog.jsx to fix Radix a11y warning.",
+    "Optional polish: separate connectivity-pill status text and cached-count with a divider/dot."
+  ],
+  "critical_code_review_comments": [
+    "server.py:1024 admin_create_key still uses `x_admin_password: str = ''` (treated as a query param by FastAPI). Falls back to request.headers['X-Admin-Password'], which works, but cleaner to declare `Header(None, alias='X-Admin-Password')`.",
+    "server.py:1067-1082 _check_api_key now resets usage_today when usage_date != today (good — fixes iteration-6 'never resets' issue). However the read-then-update is still non-atomic so concurrent calls right at the boundary may slip past daily_limit. Acceptable for current scale.",
+    "rtc_signaling.py: in-memory registry only — WebRTC rooms will not survive backend restart and will not work behind multiple replicas. OK for MVP, but document this limitation.",
+    "/api/offline/pack scoring loop (server.py:1190+) does an O(N*M) scan per request (dictionary x event terms). Fine for SEED_DICTIONARY=68 but should be cached or precomputed if dictionary grows.",
+    "VideoCall.jsx: spec asked for rtc-create-card / rtc-join-card test-ids on the Card wrappers; missing.",
+    "ShareEmailDialog: missing DialogDescription causes Radix a11y warning."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter7_phase2_block_b.py (NEW)",
+    "/app/test_reports/pytest/iter7_results.xml (NEW)"
+  ],
+  "success_rate": {
+    "backend": "100% (15/15 new tests pass; iter6 critical Stripe-status bug is unrelated to Block B and unchanged)",
+    "frontend": "~95% (all flows work; only missing two card-wrapper data-testids and a minor a11y/design polish)"
+  },
+  "test_credentials": "ADMIN_PASSWORD=signlanguage-admin-2026 (verified). RESEND_API_KEY intentionally empty (graceful no-op verified).",
+  "seed_data_creation": "Each test_rtc_websocket_two_peer_signaling run inserts an 'rtc_room_created' event into db.events. test_text_to_sign_works inserts one db.translations row and a 'text_to_sign' event. Tests do not delete these.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run iter7 tests: `pytest /app/backend/tests/test_iter7_phase2_block_b.py -v`. Requires `websockets` python package (already installed during iter7). The 2-peer WebSocket test is permissive about field naming (peer-joined vs peer_joined vs type). RESEND_API_KEY intentionally empty — /api/email/share returning {sent:false, reason:'resend_not_configured'} IS the expected behavior, NOT a bug. /api/billing/status/{sid} Stripe sentinel-key bug from iter6 is still open but out of scope for Block B.",
+  "rca of the issue": "No critical issues found in this iteration. Two trivial frontend gaps: (a) /llamada Cards lack data-testid wrappers requested in the spec — internal controls present and functional, (b) ShareEmailDialog missing a11y description. Both are low-priority polish items the main agent can fix in <5 lines each."
+}

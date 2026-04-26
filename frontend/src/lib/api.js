@@ -139,3 +139,29 @@ export async function adminDeleteKey(password, keyId) {
   });
   return data;
 }
+
+// ---- Email ----
+export async function getEmailStatus() {
+  const { data } = await api.get("/email/status");
+  return data;
+}
+export async function sendShareEmail(payload) {
+  const { data } = await api.post("/email/share", payload);
+  return data;
+}
+
+// ---- WebRTC ----
+export async function createRtcRoom() {
+  const { data } = await api.post("/rtc/room");
+  return data;
+}
+export async function getIceServers() {
+  const { data } = await api.get("/rtc/ice");
+  return data;
+}
+
+// ---- Offline pack ----
+export async function getOfflinePack(limit = 30) {
+  const { data } = await api.get("/offline/pack", { params: { limit } });
+  return data;
+}

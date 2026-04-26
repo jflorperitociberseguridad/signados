@@ -18,6 +18,8 @@ import {
   Brain,
   Users,
   Calendar,
+  PhoneCall,
+  WifiOff,
 } from "lucide-react";
 import { getSignOfTheDay } from "../lib/api";
 
@@ -192,6 +194,13 @@ export default function Home() {
             title="Historial"
             description="Revisa tus traducciones anteriores con fecha, idioma detectado y duración."
             testId="feature-history"
+          />
+          <FeatureCard
+            to="/llamada"
+            icon={PhoneCall}
+            title="Videollamada con subtítulos"
+            description="Llamadas WebRTC 1-a-1 con un código de sala y subtítulos de IA en directo. Sin instalar nada."
+            testId="feature-call"
           />
           <Card className="p-6 border border-dashed border-slate-300 bg-slate-50 rounded-xl">
             <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 border-0 mb-3">

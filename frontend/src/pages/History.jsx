@@ -10,10 +10,11 @@ import {
   TableHeader,
   TableRow,
 } from "../components/ui/table";
-import { History as HistoryIcon, Trash2, Loader2, FileDown } from "lucide-react";
+import { History as HistoryIcon, Trash2, Loader2, FileDown, Mail } from "lucide-react";
 import { getHistory, deleteHistoryItem, clearHistory } from "../lib/api";
 import { exportConversationPDF } from "../lib/pdf";
 import { toast } from "sonner";
+import ShareEmailDialog from "../components/ShareEmailDialog";
 
 const fmt = (iso) => {
   try {
@@ -173,15 +174,35 @@ export default function HistoryPage() {
                       : "—"}
                   </TableCell>
                   <TableCell>
-                    <Button
-                      data-testid={`history-delete-${it.id}`}
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleDelete(it.id)}
-                      className="text-slate-400 hover:text-red-600"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    <div className="flex items-center gap-1 justify-end">
+                      <ShareEmailDialog
+                        translationId={it.id}
+                        translationText={it.translated_text || it.source_text || ""}
+                        language={it.detected_language || "Auto"}
+                        shareUrl={`${window.location.origin}/t/${it.id}`}
+                        trigger={
+                          <Button
+                            data-testid={`history-share-${it.id}`}
+                            variant="ghost"
+                            size="icon"
+                            className="text-slate-400 hover:text-[#002FA7]"
+                            title="Compartir por email"
+                          >
+                            <span className="sr-only">Compartir</span>
+                            <Mail className="w-4 h-4" />
+                          </Button>
+                        }
+                      />
+                      <Button
+                        data-testid={`history-delete-${it.id}`}
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDelete(it.id)}
+                        className="text-slate-400 hover:text-red-600"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

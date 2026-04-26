@@ -22,11 +22,11 @@ from pathlib import Path
 from typing import List, Optional
 
 import cv2  # type: ignore
-from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -41,6 +41,13 @@ from emergentintegrations.llm.chat import (
 from emergentintegrations.payments.stripe.checkout import (
     StripeCheckout,
     CheckoutSessionRequest,
+)
+
+import email_service  # type: ignore  # noqa: E402
+from rtc_signaling import (  # type: ignore  # noqa: E402
+    generate_room_code,
+    handle_signaling,
+    room_stats,
 )
 
 
@@ -929,6 +936,29 @@ async def stripe_webhook(request: Request):
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }},
         )
+        # Send receipt email when payment becomes "paid" (only once)
+        if ev.payment_status == "paid":
+            tx = await db.payment_transactions.find_one(
+                {"session_id": ev.session_id}, {"_id": 0}
+            )
+            if tx and not tx.get("receipt_sent"):
+                meta = tx.get("metadata") or {}
+                recipient = meta.get("email") or ""
+                if recipient and recipient != "anonymous" and "@" in recipient:
+                    pkg_label = PRICING_PACKAGES.get(tx.get("package_id"), {}).get("label", "Pro")
+                    subject, html = email_service.template_billing_receipt(
+                        amount=float(tx.get("amount") or 0),
+                        currency=tx.get("currency") or "eur",
+                        package_label=pkg_label,
+                        session_id=ev.session_id,
+                    )
+                    asyncio.create_task(
+                        email_service.send_email(to=recipient, subject=subject, html=html)
+                    )
+                    await db.payment_transactions.update_one(
+                        {"session_id": ev.session_id},
+                        {"$set": {"receipt_sent": True}},
+                    )
     asyncio.create_task(record_event(f"stripe_{ev.event_type}", {"session_id": ev.session_id}))
     return {"received": True}
 
@@ -1078,6 +1108,143 @@ async def public_dictionary(request: Request, q: Optional[str] = None, language:
         ql = q.lower().strip()
         items = [i for i in items if ql in i.word.lower() or ql in i.description.lower()]
     return [i.model_dump() for i in items]
+
+
+# ---------------------------------------------------------------------------
+# Email (Resend)
+# ---------------------------------------------------------------------------
+class ShareEmailRequest(BaseModel):
+    to: EmailStr
+    translation_id: Optional[str] = None
+    translation_text: str = Field(min_length=1, max_length=2000)
+    language: Optional[str] = "Auto"
+    sender_name: Optional[str] = None
+    share_url: str = Field(min_length=1, max_length=500)
+
+
+@api_router.get("/email/status")
+async def email_status():
+    return {"configured": email_service.is_configured()}
+
+
+@api_router.post("/email/share")
+@limiter.limit("10/minute")
+async def email_share(request: Request, payload: ShareEmailRequest):
+    subject, html = email_service.template_share(
+        translation_text=payload.translation_text,
+        language=payload.language or "Auto",
+        share_url=payload.share_url,
+        sender_name=payload.sender_name or "Alguien",
+    )
+    res = await email_service.send_email(to=payload.to, subject=subject, html=html)
+    asyncio.create_task(
+        record_event(
+            "email_share",
+            {"sent": res.get("sent", False), "language": payload.language},
+        )
+    )
+    return res
+
+
+class WelcomeEmailRequest(BaseModel):
+    to: EmailStr
+    plan_label: str = "Pro"
+    app_url: str = ""
+
+
+@api_router.post("/email/welcome")
+@limiter.limit("10/minute")
+async def email_welcome(request: Request, payload: WelcomeEmailRequest):
+    app_url = payload.app_url or _env("APP_PUBLIC_URL") or str(request.base_url).rstrip("/")
+    subject, html = email_service.template_welcome(payload.plan_label, app_url)
+    res = await email_service.send_email(to=payload.to, subject=subject, html=html)
+    asyncio.create_task(record_event("email_welcome", {"sent": res.get("sent", False)}))
+    return res
+
+
+# ---------------------------------------------------------------------------
+# Offline pack (top-N most-used signs for PWA cache)
+# ---------------------------------------------------------------------------
+@api_router.get("/offline/pack")
+async def offline_pack(limit: int = 30):
+    """Return the top-N dictionary entries by recent usage so the PWA can
+    cache them for offline access."""
+    limit = max(5, min(100, int(limit)))
+    # Combine searches + practice attempts + text-to-sign words to score signs
+    score: dict = {}
+    try:
+        async for ev in db.events.find(
+            {"type": {"$in": ["dictionary_search", "practice_attempt"]}},
+            {"_id": 0, "type": 1, "data": 1},
+        ):
+            data = ev.get("data") or {}
+            term = (data.get("q") or data.get("word") or "").lower().strip()
+            if not term:
+                continue
+            score[term] = score.get(term, 0) + 1
+    except Exception:
+        pass
+
+    # Score dictionary entries: matches by word/description
+    scored = []
+    for entry in SEED_DICTIONARY:
+        s = 0
+        w = entry.word.lower()
+        if w in score:
+            s += score[w] * 3
+        for term, c in score.items():
+            if term and (term in w or w in term):
+                s += c
+        scored.append((s, entry))
+    scored.sort(key=lambda kv: -kv[0])
+
+    # If no usage data yet, just return the first N entries
+    chosen = [e for _, e in scored[:limit]] if any(s > 0 for s, _ in scored) else SEED_DICTIONARY[:limit]
+    return {
+        "version": datetime.now(timezone.utc).date().isoformat(),
+        "count": len(chosen),
+        "items": [e.model_dump() for e in chosen],
+    }
+
+
+# ---------------------------------------------------------------------------
+# WebRTC signaling
+# ---------------------------------------------------------------------------
+@api_router.post("/rtc/room")
+@limiter.limit("30/minute")
+async def rtc_create_room(request: Request):
+    """Generate a fresh, shareable 6-character room code."""
+    code = generate_room_code(6)
+    asyncio.create_task(record_event("rtc_room_created", {"code": code}))
+    return {"room": code, "expires_in_minutes": 60}
+
+
+@api_router.get("/rtc/stats")
+async def rtc_stats():
+    return room_stats()
+
+
+@api_router.get("/rtc/ice")
+async def rtc_ice():
+    """Return ICE servers (STUN). For production, set TURN_URL/TURN_USER/TURN_PASS env."""
+    servers = [
+        {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]},
+    ]
+    turn_url = _env("TURN_URL")
+    if turn_url:
+        servers.append({
+            "urls": [turn_url],
+            "username": _env("TURN_USER"),
+            "credential": _env("TURN_PASS"),
+        })
+    return {"iceServers": servers}
+
+
+# WebSocket endpoint mounted on the FastAPI app (NOT the router) so the path
+# resolves correctly. Still uses the /api prefix for ingress routing.
+@app.websocket("/api/rtc/{room_id}")
+async def rtc_ws(websocket: WebSocket, room_id: str):
+    await handle_signaling(websocket, room_id.upper())
 
 
 # ---- Mount ----

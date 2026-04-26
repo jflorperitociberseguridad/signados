@@ -18,6 +18,7 @@ import {
   Flame,
   Sparkles,
   CreditCard,
+  PhoneCall,
 } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 import AccessibilityMenu from "./AccessibilityMenu";
@@ -30,6 +31,7 @@ const NAV = [
   { to: "/practica", icon: Target, label: "Práctica", testId: "nav-practice" },
   { to: "/quiz", icon: Brain, label: "Quiz", testId: "nav-quiz" },
   { to: "/avatar", icon: Sparkles, label: "Avatar 3D", testId: "nav-avatar" },
+  { to: "/llamada", icon: PhoneCall, label: "Llamada", testId: "nav-call" },
   { to: "/alfabeto", icon: SpellCheck, label: "Alfabeto", testId: "nav-fingerspelling" },
   { to: "/conversacion", icon: MessageSquare, label: "Conversa", testId: "nav-conversation" },
   { to: "/diccionario", icon: BookOpen, label: "Dicc.", testId: "nav-dictionary" },
