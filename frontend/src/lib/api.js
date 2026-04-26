@@ -95,3 +95,47 @@ export async function validatePractice(payload) {
   const { data } = await api.post("/practice/validate", payload);
   return data;
 }
+
+// ---- Billing ----
+export async function getPlans() {
+  const { data } = await api.get("/billing/plans");
+  return data;
+}
+export async function createCheckout(packageId, originUrl, email) {
+  const { data } = await api.post("/billing/checkout", {
+    package_id: packageId,
+    origin_url: originUrl,
+    email: email || null,
+  });
+  return data;
+}
+export async function getCheckoutStatus(sessionId) {
+  const { data } = await api.get(`/billing/status/${sessionId}`);
+  return data;
+}
+
+// ---- Admin / API keys ----
+export async function adminLogin(password) {
+  const { data } = await api.post("/admin/login", { password });
+  return data;
+}
+export async function adminListKeys(password) {
+  const { data } = await api.get("/admin/api-keys", {
+    headers: { "X-Admin-Password": password },
+  });
+  return data;
+}
+export async function adminCreateKey(password, label, dailyLimit = 1000) {
+  const { data } = await api.post(
+    "/admin/api-keys",
+    { label, daily_limit: dailyLimit },
+    { headers: { "X-Admin-Password": password } },
+  );
+  return data;
+}
+export async function adminDeleteKey(password, keyId) {
+  const { data } = await api.delete(`/admin/api-keys/${keyId}`, {
+    headers: { "X-Admin-Password": password },
+  });
+  return data;
+}

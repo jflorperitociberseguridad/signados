@@ -16,6 +16,8 @@ import {
   Users,
   Trophy,
   Flame,
+  Sparkles,
+  CreditCard,
 } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 import AccessibilityMenu from "./AccessibilityMenu";
@@ -27,11 +29,13 @@ const NAV = [
   { to: "/texto-a-signos", icon: Type, label: "Texto", testId: "nav-text-to-sign" },
   { to: "/practica", icon: Target, label: "Práctica", testId: "nav-practice" },
   { to: "/quiz", icon: Brain, label: "Quiz", testId: "nav-quiz" },
+  { to: "/avatar", icon: Sparkles, label: "Avatar 3D", testId: "nav-avatar" },
   { to: "/alfabeto", icon: SpellCheck, label: "Alfabeto", testId: "nav-fingerspelling" },
   { to: "/conversacion", icon: MessageSquare, label: "Conversa", testId: "nav-conversation" },
   { to: "/diccionario", icon: BookOpen, label: "Dicc.", testId: "nav-dictionary" },
   { to: "/comunidad", icon: Users, label: "Comunidad", testId: "nav-community" },
   { to: "/historial", icon: History, label: "Historial", testId: "nav-history" },
+  { to: "/precios", icon: CreditCard, label: "Pro", testId: "nav-pricing" },
   { to: "/analytics", icon: BarChart3, label: "Analítica", testId: "nav-analytics" },
 ];
 

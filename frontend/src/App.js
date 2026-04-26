@@ -15,6 +15,9 @@ import Analytics from "@/pages/Analytics";
 import Practice from "@/pages/Practice";
 import Quiz from "@/pages/Quiz";
 import CommunitySign from "@/pages/CommunitySign";
+import Pricing from "@/pages/Pricing";
+import Admin from "@/pages/Admin";
+import AvatarSign from "@/pages/AvatarSign";
 import { trackEvent } from "@/lib/api";
 
 function PageTracker() {
@@ -49,6 +52,9 @@ export default function App() {
             <Route path="/practica" element={<Practice />} />
             <Route path="/quiz" element={<Quiz />} />
             <Route path="/comunidad" element={<CommunitySign />} />
+            <Route path="/avatar" element={<AvatarSign />} />
+            <Route path="/precios" element={<Pricing />} />
+            <Route path="/admin" element={<Admin />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/t/:id" element={<SharePage />} />
           </Route>

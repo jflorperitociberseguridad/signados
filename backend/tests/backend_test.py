@@ -882,3 +882,237 @@ class TestCommunityIsolation:
         after = http.get(f"{API}/history", timeout=30).json()
         assert len(after) == before_count, "community submission must not write to db.translations"
 
+
+
+# ===========================================================================
+# Iteration 6 — Phase 2 backend additions
+#  - Stripe billing (plans, checkout, status)
+#  - Admin API keys (login, create/list/delete)
+#  - Public v1 API (text-to-sign, dictionary) protected by X-API-Key
+# ===========================================================================
+ADMIN_PASSWORD = "signlanguage-admin-2026"
+
+
+# ---------- Billing ----------
+class TestBillingPlans:
+    def test_plans_structure(self, http):
+        r = http.get(f"{API}/billing/plans", timeout=30)
+        assert r.status_code == 200
+        data = r.json()
+        assert "free" in data
+        assert "packages" in data
+        # free plan validation
+        assert data["free"]["price"] == 0
+        assert isinstance(data["free"]["features"], list)
+        assert len(data["free"]["features"]) > 0
+        # packages validation - must have all 3 (pro_monthly, pro_yearly, team)
+        ids = [p["id"] for p in data["packages"]]
+        assert "pro_monthly" in ids
+        assert "pro_yearly" in ids
+        assert "team" in ids
+        for p in data["packages"]:
+            assert "amount" in p
+            assert "currency" in p
+            assert "label" in p
+            assert "features" in p
+            assert isinstance(p["amount"], (int, float))
+            assert p["amount"] > 0
+
+
+class TestBillingCheckout:
+    def test_checkout_invalid_package_returns_400(self, http):
+        r = http.post(
+            f"{API}/billing/checkout",
+            json={"package_id": "doesnotexist", "origin_url": "https://example.com"},
+            timeout=30,
+        )
+        assert r.status_code == 400
+
+    def test_checkout_pro_monthly_returns_url_and_session(self, http):
+        r = http.post(
+            f"{API}/billing/checkout",
+            json={
+                "package_id": "pro_monthly",
+                "origin_url": "https://example.com",
+                "email": "TEST_buyer@example.com",
+            },
+            timeout=60,
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert "url" in data and data["url"].startswith("http")
+        assert "session_id" in data and isinstance(data["session_id"], str)
+        # save for status test
+        pytest.checkout_session_id = data["session_id"]
+
+    def test_checkout_status_for_just_created_session(self, http):
+        sid = getattr(pytest, "checkout_session_id", None)
+        if not sid:
+            pytest.skip("no session created")
+        r = http.get(f"{API}/billing/status/{sid}", timeout=30)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert "status" in data
+        assert "payment_status" in data
+        # newly created session must not be paid
+        assert data["payment_status"] in ("unpaid", "no_payment_required", None)
+
+
+# ---------- Admin login ----------
+class TestAdminLogin:
+    def test_login_wrong_password_401(self, http):
+        r = http.post(f"{API}/admin/login", json={"password": "wrong"}, timeout=30)
+        assert r.status_code == 401
+
+    def test_login_correct_password_ok(self, http):
+        r = http.post(f"{API}/admin/login", json={"password": ADMIN_PASSWORD}, timeout=30)
+        assert r.status_code == 200
+        assert r.json().get("ok") is True
+
+
+# ---------- Admin API keys ----------
+class TestAdminApiKeys:
+    def test_create_key_without_admin_pwd_401(self, http):
+        r = http.post(
+            f"{API}/admin/api-keys",
+            json={"label": "TEST_key_nopwd"},
+            timeout=30,
+        )
+        assert r.status_code == 401
+
+    def test_list_keys_without_admin_pwd_401(self, http):
+        r = http.get(f"{API}/admin/api-keys", timeout=30)
+        assert r.status_code == 401
+
+    def test_create_then_list_then_delete(self, http):
+        # CREATE
+        headers = {"X-Admin-Password": ADMIN_PASSWORD}
+        label = f"TEST_apikey_{uuid.uuid4().hex[:6]}"
+        r = http.post(
+            f"{API}/admin/api-keys",
+            json={"label": label, "daily_limit": 5},
+            headers=headers,
+            timeout=30,
+        )
+        assert r.status_code == 200, r.text
+        created = r.json()
+        assert created["label"] == label
+        assert created["daily_limit"] == 5
+        assert created["usage_today"] == 0
+        assert created["key"].startswith("slp_")
+        assert created["active"] is True
+        key_id = created["id"]
+        api_key = created["key"]
+        pytest.test_api_key = api_key
+        pytest.test_api_key_id = key_id
+        pytest.test_api_key_initial_usage = created["usage_today"]
+
+        # LIST - must contain our key
+        r = http.get(f"{API}/admin/api-keys", headers=headers, timeout=30)
+        assert r.status_code == 200
+        items = r.json()
+        assert any(k["id"] == key_id for k in items)
+
+    def test_delete_missing_key_returns_404(self, http):
+        headers = {"X-Admin-Password": ADMIN_PASSWORD}
+        fake_id = "no-such-id-" + uuid.uuid4().hex
+        r = http.delete(f"{API}/admin/api-keys/{fake_id}", headers=headers, timeout=30)
+        assert r.status_code == 404
+
+
+# ---------- Public v1 API (X-API-Key protected) ----------
+class TestPublicV1Auth:
+    def test_text_to_sign_no_key_401(self, http):
+        r = http.post(
+            f"{API}/v1/translate/text-to-sign",
+            json={"text": "hola"},
+            timeout=30,
+        )
+        assert r.status_code == 401
+
+    def test_text_to_sign_invalid_key_401(self, http):
+        r = http.post(
+            f"{API}/v1/translate/text-to-sign",
+            json={"text": "hola"},
+            headers={"X-API-Key": "slp_invalidkeyxxxx"},
+            timeout=30,
+        )
+        assert r.status_code == 401
+
+    def test_dictionary_no_key_401(self, http):
+        r = http.get(f"{API}/v1/dictionary?q=hola", timeout=30)
+        assert r.status_code == 401
+
+
+class TestPublicV1WithKey:
+    def test_dictionary_with_valid_key_increments_usage(self, http):
+        api_key = getattr(pytest, "test_api_key", None)
+        if not api_key:
+            pytest.skip("no api key created")
+
+        # call public dictionary
+        r = http.get(
+            f"{API}/v1/dictionary?q=hola",
+            headers={"X-API-Key": api_key},
+            timeout=30,
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+
+        # verify usage_today incremented
+        admin_headers = {"X-Admin-Password": ADMIN_PASSWORD}
+        keys = http.get(f"{API}/admin/api-keys", headers=admin_headers, timeout=30).json()
+        ours = next((k for k in keys if k["key"] == api_key), None)
+        assert ours is not None
+        assert ours["usage_today"] >= 1
+        assert ours["last_used_at"] is not None
+
+    def test_text_to_sign_with_valid_key(self, http):
+        api_key = getattr(pytest, "test_api_key", None)
+        if not api_key:
+            pytest.skip("no api key created")
+        r = http.post(
+            f"{API}/v1/translate/text-to-sign",
+            json={"text": "hola", "target_language": "LSE"},
+            headers={"X-API-Key": api_key},
+            timeout=120,
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert "summary" in data
+        assert "steps" in data
+        assert "language" in data
+        assert isinstance(data["steps"], list)
+
+    def test_daily_limit_429(self, http):
+        """daily_limit was set to 5 → after enough calls, must 429."""
+        api_key = getattr(pytest, "test_api_key", None)
+        if not api_key:
+            pytest.skip("no api key created")
+        # Burn remaining quota with cheap dictionary calls (max 10 attempts)
+        last_status = None
+        for _ in range(15):
+            r = http.get(
+                f"{API}/v1/dictionary?q=hola",
+                headers={"X-API-Key": api_key},
+                timeout=30,
+            )
+            last_status = r.status_code
+            if r.status_code == 429:
+                break
+        assert last_status == 429, f"expected 429 after exhausting daily_limit, got {last_status}"
+
+
+# ---------- Cleanup ----------
+class TestIter6Cleanup:
+    def test_delete_test_api_key(self, http):
+        key_id = getattr(pytest, "test_api_key_id", None)
+        if not key_id:
+            pytest.skip("no api key id")
+        headers = {"X-Admin-Password": ADMIN_PASSWORD}
+        r = http.delete(f"{API}/admin/api-keys/{key_id}", headers=headers, timeout=30)
+        assert r.status_code == 200
+        # verify gone
+        keys = http.get(f"{API}/admin/api-keys", headers=headers, timeout=30).json()
+        assert not any(k["id"] == key_id for k in keys)

@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 6 - Phase 2 backend additions tested. Added 17 new tests for Stripe billing (plans/checkout/status), Admin auth + API keys (login/create/list/delete with X-Admin-Password), and Public v1 API (text-to-sign + dictionary protected by X-API-Key with daily limits). 16/17 new tests pass. All 60 prior tests still pass (no regressions). One critical failure: GET /api/billing/status/{session_id} returns 502 'No such checkout.session' for sessions just created via POST /api/billing/checkout — same key, same session_id, reproducible.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/billing/status/{session_id}",
+        "issue": "Returns 502 'No such checkout.session' for a session that was just successfully created by POST /api/billing/checkout (same STRIPE_API_KEY=sk_test_emergent, same session_id). Reproducible 100%. Likely an issue with the emergentintegrations StripeCheckout client when used with the sentinel key sk_test_emergent — sessions appear to be created on one Stripe account but retrieval is routed to another. This breaks the post-checkout success page flow on /precios?session_id=... which polls this endpoint to confirm payment.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix GET /api/billing/status/{session_id}: investigate why retrieving a session created with sk_test_emergent fails with 'No such checkout.session'. May require: (1) calling emergentintegrations StripeCheckout differently for retrieval, (2) using a real sk_test_... key in /app/backend/.env, or (3) using web_search to look up correct emergentintegrations Stripe checkout retrieval pattern. Without this fix, the success-page flow after Stripe payment will not work.",
+    "Consider also testing webhook delivery (/api/webhook/stripe) once status retrieval is fixed."
+  ],
+  "critical_code_review_comments": [
+    "server.py:881 — db.payment_transactions update only sets new status if not already paid (good — idempotent). But still calls Stripe even when tx is already paid; consider short-circuiting when tx.payment_status=='paid'.",
+    "server.py:982 — admin_create_key reads X-Admin-Password from FastAPI Header param `x_admin_password` (default '') OR request.headers fallback. The Header param is `x_admin_password: str = ''` (not declared with Header(...)), so FastAPI treats it as a query param. The fallback to request.headers does work, but cleaner to use `Header(None, alias='X-Admin-Password')`.",
+    "server.py:1024 — _check_api_key has TOCTOU race: usage_today read then incremented in non-atomic two-step. For concurrent requests at limit boundary, could allow a few extra calls past daily_limit. Not critical but could combine into a single conditional update.",
+    "server.py:1024 — usage_today is never reset to 0 at midnight. Documented daily_limit will become a permanent total limit. Needs a reset job or per-day bucket key (e.g., usage_by_day dict keyed by ISO date).",
+    "server.py:81 — ADMIN_PASSWORD defaults to 'change-me' if env missing — fine but worth logging a warning at startup."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (appended iteration 6 tests for Billing/Admin/Public v1)"
+  ],
+  "success_rate": {
+    "backend": "98.7% (75/76 ran, 1 failed; 1 skipped due to missing ffmpeg)",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "ADMIN_PASSWORD=signlanguage-admin-2026 (verified working). STRIPE_API_KEY=sk_test_emergent (creates sessions but cannot retrieve them).",
+  "seed_data_creation": "Each run creates one TEST_apikey_<rand> in db.api_keys (deleted at end), one Stripe checkout session in db.payment_transactions (left as test data — has TEST_buyer@example.com email).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 6 added 17 tests after line 885 of /app/backend/tests/backend_test.py covering Phase 2 features. Use `pytest -k 'Iter6 or Billing or Admin or PublicV1'` to run only Phase 2. The failing test test_checkout_status_for_just_created_session reproduces the Stripe sentinel-key retrieval bug — leave it failing until main agent fixes the integration. usage_today counter does not reset daily — relevant for any 429 limit testing across multiple test runs (re-run will reuse same key only if not deleted). Tests assume daily_limit=5 and burn the quota in test_daily_limit_429 — order matters within TestPublicV1WithKey class.",
+  "rca of the issue": "POST /api/billing/checkout calls StripeCheckout(api_key='sk_test_emergent', webhook_url=...).create_checkout_session(...) — returns a real Stripe test session with valid checkout.stripe.com URL. GET /api/billing/status/{sid} calls StripeCheckout(api_key='sk_test_emergent', webhook_url='').get_checkout_status(sid). Stripe responds 'No such checkout.session: cs_test_...'. Reproduction: curl POST /api/billing/checkout body {'package_id':'pro_monthly','origin_url':'https://example.com'} → 200 with session_id; immediately GET /api/billing/status/<that session_id> → 502. Mitigation options: (a) confirm with emergent-integration docs whether sk_test_emergent supports session retrieval; (b) switch to a real sk_test_... key in backend/.env; (c) check if StripeCheckout exposes an account-aware retrieval method requiring metadata or stripe_account header passed through."
+}

@@ -38,6 +38,10 @@ from emergentintegrations.llm.chat import (
     LlmChat,
     UserMessage,
 )
+from emergentintegrations.payments.stripe.checkout import (
+    StripeCheckout,
+    CheckoutSessionRequest,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +77,15 @@ RATE_EVENT = _env("RATE_LIMIT_EVENT", "60/minute")
 LOG_LEVEL = _env("LOG_LEVEL", "INFO").upper()
 ALLOWED_HOSTS = [h.strip() for h in _env("ALLOWED_HOSTS", "*").split(",") if h.strip()]
 CORS_ORIGINS = [o.strip() for o in _env("CORS_ORIGINS", "*").split(",") if o.strip()]
+STRIPE_API_KEY = _env("STRIPE_API_KEY")
+ADMIN_PASSWORD = _env("ADMIN_PASSWORD") or "change-me"
+
+# Fixed pricing packages — defined SERVER-SIDE (never trust client amounts)
+PRICING_PACKAGES = {
+    "pro_monthly": {"amount": 9.0, "currency": "eur", "label": "Pro mensual"},
+    "pro_yearly": {"amount": 90.0, "currency": "eur", "label": "Pro anual"},
+    "team": {"amount": 49.0, "currency": "eur", "label": "Team mensual"},
+}
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -95,6 +108,9 @@ async def ensure_indexes() -> None:
         await db.translations.create_index([("mode", 1)])
         await db.events.create_index([("ts", -1)])
         await db.events.create_index([("type", 1)])
+        await db.api_keys.create_index([("key", 1)], unique=True)
+        await db.payment_transactions.create_index([("session_id", 1)], unique=True)
+        await db.payment_transactions.create_index([("created_at", -1)])
         logger.info("Mongo indexes ensured")
     except Exception as exc:  # pragma: no cover
         logger.warning("Index creation failed: %s", exc)
@@ -789,6 +805,257 @@ async def practice_validate(request: Request, payload: PracticeRequest):
         "strengths": parsed.get("strengths", []),
         "weaknesses": parsed.get("weaknesses", []),
     }
+
+
+# ---------------------------------------------------------------------------
+# Billing (Stripe)
+# ---------------------------------------------------------------------------
+class CheckoutCreateRequest(BaseModel):
+    package_id: str
+    origin_url: str
+    email: Optional[str] = None
+
+
+@api_router.post("/billing/checkout")
+@limiter.limit("10/minute")
+async def billing_checkout(request: Request, payload: CheckoutCreateRequest):
+    if payload.package_id not in PRICING_PACKAGES:
+        raise HTTPException(status_code=400, detail="Paquete inválido")
+    if not STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Stripe no configurado en este servidor")
+
+    pkg = PRICING_PACKAGES[payload.package_id]
+    origin = payload.origin_url.rstrip("/")
+    success = f"{origin}/precios?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel = f"{origin}/precios"
+    host_url = str(request.base_url)
+    webhook_url = f"{host_url.rstrip('/')}/api/webhook/stripe"
+    sc = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    req = CheckoutSessionRequest(
+        amount=float(pkg["amount"]),
+        currency=pkg["currency"],
+        success_url=success,
+        cancel_url=cancel,
+        metadata={
+            "package_id": payload.package_id,
+            "label": pkg["label"],
+            "email": payload.email or "anonymous",
+            "source": "signlanguage_pro",
+        },
+    )
+    try:
+        session = await sc.create_checkout_session(req)
+    except Exception as exc:
+        logger.exception("stripe checkout failed")
+        raise HTTPException(status_code=502, detail=f"Stripe error: {exc}")
+
+    await db.payment_transactions.insert_one({
+        "session_id": session.session_id,
+        "amount": pkg["amount"],
+        "currency": pkg["currency"],
+        "package_id": payload.package_id,
+        "metadata": {"email": payload.email or "anonymous"},
+        "status": "initiated",
+        "payment_status": "unpaid",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
+    asyncio.create_task(record_event("checkout_initiated", {"package": payload.package_id}))
+    return {"url": session.url, "session_id": session.session_id}
+
+
+@api_router.get("/billing/status/{session_id}")
+async def billing_status(session_id: str):
+    if not STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Stripe no configurado")
+    sc = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url="")
+    try:
+        st = await sc.get_checkout_status(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    # Update tx atomically (only if not already paid)
+    tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    if tx and tx.get("payment_status") != "paid":
+        await db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {"$set": {
+                "status": st.status,
+                "payment_status": st.payment_status,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        if st.payment_status == "paid":
+            asyncio.create_task(record_event("checkout_paid", {"package": tx.get("package_id")}))
+    return {
+        "status": st.status,
+        "payment_status": st.payment_status,
+        "amount_total": st.amount_total,
+        "currency": st.currency,
+    }
+
+
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    if not STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Stripe no configurado")
+    body = await request.body()
+    sig = request.headers.get("Stripe-Signature", "")
+    sc = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url="")
+    try:
+        ev = await sc.handle_webhook(body, sig)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"webhook error: {exc}")
+    # Idempotent update by session_id
+    if ev.session_id:
+        await db.payment_transactions.update_one(
+            {"session_id": ev.session_id},
+            {"$set": {
+                "payment_status": ev.payment_status,
+                "event_type": ev.event_type,
+                "event_id": ev.event_id,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+    asyncio.create_task(record_event(f"stripe_{ev.event_type}", {"session_id": ev.session_id}))
+    return {"received": True}
+
+
+@api_router.get("/billing/plans")
+async def billing_plans():
+    return {
+        "free": {
+            "label": "Gratis",
+            "price": 0,
+            "currency": "eur",
+            "features": [
+                "Traducciones limitadas (rate-limit estándar)",
+                "Diccionario completo + práctica + quiz",
+                "Modo conversación",
+                "Análisis básico",
+            ],
+        },
+        "packages": [
+            {
+                "id": k,
+                "label": v["label"],
+                "amount": v["amount"],
+                "currency": v["currency"],
+                "features": [
+                    "Traducciones ilimitadas",
+                    "API key para integrar en tu web",
+                    "Sin marca de agua en exportaciones",
+                    "Soporte prioritario",
+                ],
+            }
+            for k, v in PRICING_PACKAGES.items()
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# API keys (admin-only generation)
+# ---------------------------------------------------------------------------
+class AdminAuthRequest(BaseModel):
+    password: str
+
+
+class ApiKeyCreate(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    daily_limit: Optional[int] = 1000
+
+
+def _verify_admin(password: str):
+    if not ADMIN_PASSWORD or password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+
+
+@api_router.post("/admin/login")
+@limiter.limit("5/minute")
+async def admin_login(request: Request, payload: AdminAuthRequest):
+    _verify_admin(payload.password)
+    return {"ok": True}
+
+
+@api_router.post("/admin/api-keys")
+@limiter.limit("20/minute")
+async def admin_create_key(request: Request, payload: ApiKeyCreate, x_admin_password: str = ""):
+    _verify_admin(x_admin_password or request.headers.get("X-Admin-Password", ""))
+    key = "slp_" + uuid.uuid4().hex
+    doc = {
+        "id": str(uuid.uuid4()),
+        "key": key,
+        "label": payload.label,
+        "daily_limit": int(payload.daily_limit or 1000),
+        "usage_today": 0,
+        "usage_total": 0,
+        "last_used_at": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "active": True,
+    }
+    await db.api_keys.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/admin/api-keys")
+async def admin_list_keys(request: Request):
+    _verify_admin(request.headers.get("X-Admin-Password", ""))
+    docs = await db.api_keys.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return docs
+
+
+@api_router.delete("/admin/api-keys/{key_id}")
+async def admin_delete_key(request: Request, key_id: str):
+    _verify_admin(request.headers.get("X-Admin-Password", ""))
+    res = await db.api_keys.delete_one({"id": key_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"deleted": res.deleted_count}
+
+
+# ---- Public API (key-protected, for widget / 3rd parties) ----
+async def _check_api_key(request: Request) -> dict:
+    api_key = request.headers.get("X-API-Key", "") or request.query_params.get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing X-API-Key")
+    doc = await db.api_keys.find_one({"key": api_key, "active": True}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    if doc.get("usage_today", 0) >= doc.get("daily_limit", 1000):
+        raise HTTPException(status_code=429, detail="Daily limit reached")
+    await db.api_keys.update_one(
+        {"key": api_key},
+        {"$inc": {"usage_today": 1, "usage_total": 1},
+         "$set": {"last_used_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return doc
+
+
+@api_router.post("/v1/translate/text-to-sign")
+async def public_text_to_sign(request: Request, payload: TextToSignRequest):
+    await _check_api_key(request)
+    try:
+        parsed = await call_llm_text_to_sign(payload.text, payload.target_language or "auto")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI error: {exc}")
+    return {
+        "text": payload.text,
+        "language": parsed.get("language", "auto"),
+        "summary": parsed.get("summary", ""),
+        "steps": parsed.get("steps", []),
+    }
+
+
+@api_router.get("/v1/dictionary")
+async def public_dictionary(request: Request, q: Optional[str] = None, language: Optional[str] = None):
+    await _check_api_key(request)
+    items = SEED_DICTIONARY
+    if language and language != "all":
+        items = [i for i in items if i.language.lower() == language.lower()]
+    if q:
+        ql = q.lower().strip()
+        items = [i for i in items if ql in i.word.lower() or ql in i.description.lower()]
+    return [i.model_dump() for i in items]
 
 
 # ---- Mount ----
