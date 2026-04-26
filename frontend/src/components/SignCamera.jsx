@@ -56,6 +56,22 @@ export default function SignCamera({
   const batchStartRef = useRef(0);
   const movingRef = useRef(false);
   const drawRafRef = useRef(null);
+  const containerRef = useRef(null);
+  const zoomLayerRef = useRef(null);
+  // Pinch / pan transient state
+  const pinchRef = useRef({
+    active: false,
+    startDist: 0,
+    startScale: 1,
+  });
+  const panRef = useRef({
+    active: false,
+    startX: 0,
+    startY: 0,
+    startTx: 0,
+    startTy: 0,
+    moved: false,
+  });
 
   const [cameraOn, setCameraOn] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -73,7 +89,160 @@ export default function SignCamera({
       : initialOrientation,
   );
   const [facing, setFacing] = useState("user"); // user | environment
-  const [zoom, setZoom] = useState(1); // 0.5..2 (visual CSS scale)
+  const [zoom, setZoom] = useState(1); // 0.5..3 (visual CSS scale)
+  const [tx, setTx] = useState(0);
+  const [ty, setTy] = useState(0);
+  const [animating, setAnimating] = useState(false);
+
+  const ZOOM_MIN = 0.5;
+  const ZOOM_MAX = 3;
+
+  /** Clamp pan so the image edge never reveals the container background. */
+  const clampPan = (nx, ny, s = zoom) => {
+    const c = containerRef.current;
+    if (!c) return { x: 0, y: 0 };
+    const W = c.clientWidth;
+    const H = c.clientHeight;
+    // For s >= 1, the scaled image extends beyond container, so we can pan by
+    // up to (s-1)*W/2 on each side. For s < 1, we forbid panning (image is
+    // smaller than container — keep it centered).
+    if (s <= 1) return { x: 0, y: 0 };
+    const maxX = ((s - 1) * W) / 2;
+    const maxY = ((s - 1) * H) / 2;
+    return {
+      x: Math.max(-maxX, Math.min(maxX, nx)),
+      y: Math.max(-maxY, Math.min(maxY, ny)),
+    };
+  };
+
+  /** Set zoom while keeping the focal point under the cursor stable. */
+  const zoomTo = (next, focal) => {
+    next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, +next.toFixed(3)));
+    if (next === zoom) return;
+    const c = containerRef.current;
+    if (!c || !focal) {
+      const p = clampPan(tx, ty, next);
+      setZoom(next);
+      setTx(p.x);
+      setTy(p.y);
+      return;
+    }
+    const rect = c.getBoundingClientRect();
+    // focal in container coords
+    const fx = focal.x - rect.left - rect.width / 2;
+    const fy = focal.y - rect.top - rect.height / 2;
+    // image-space coordinates of focal under current scale
+    const ix = (fx - tx) / zoom;
+    const iy = (fy - ty) / zoom;
+    // new translation so the same image-point stays under cursor
+    const newTx = fx - ix * next;
+    const newTy = fy - iy * next;
+    const p = clampPan(newTx, newTy, next);
+    setZoom(next);
+    setTx(p.x);
+    setTy(p.y);
+  };
+
+  // Reset zoom helper (double-tap / double-click)
+  const resetZoom = () => {
+    setAnimating(true);
+    setZoom(1);
+    setTx(0);
+    setTy(0);
+    setTimeout(() => setAnimating(false), 220);
+  };
+
+  // ---- Wheel zoom ----
+  const onWheel = (e) => {
+    if (!cameraOn) return;
+    e.preventDefault();
+    const factor = Math.exp(-e.deltaY * 0.0015); // smooth log scale
+    zoomTo(zoom * factor, { x: e.clientX, y: e.clientY });
+  };
+
+  // ---- Touch (pinch + pan) ----
+  const onTouchStart = (e) => {
+    if (!cameraOn) return;
+    if (e.touches.length === 2) {
+      const [a, b] = e.touches;
+      pinchRef.current = {
+        active: true,
+        startDist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1,
+        startScale: zoom,
+      };
+    } else if (e.touches.length === 1 && zoom > 1) {
+      const t = e.touches[0];
+      panRef.current = {
+        active: true,
+        startX: t.clientX,
+        startY: t.clientY,
+        startTx: tx,
+        startTy: ty,
+        moved: false,
+      };
+    }
+  };
+  const onTouchMove = (e) => {
+    if (!cameraOn) return;
+    if (pinchRef.current.active && e.touches.length === 2) {
+      e.preventDefault();
+      const [a, b] = e.touches;
+      const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
+      const ratio = d / pinchRef.current.startDist;
+      const focal = {
+        x: (a.clientX + b.clientX) / 2,
+        y: (a.clientY + b.clientY) / 2,
+      };
+      zoomTo(pinchRef.current.startScale * ratio, focal);
+    } else if (panRef.current.active && e.touches.length === 1) {
+      e.preventDefault();
+      const t = e.touches[0];
+      const nx = panRef.current.startTx + (t.clientX - panRef.current.startX);
+      const ny = panRef.current.startTy + (t.clientY - panRef.current.startY);
+      const p = clampPan(nx, ny);
+      setTx(p.x);
+      setTy(p.y);
+    }
+  };
+  const onTouchEnd = (e) => {
+    if (e.touches.length < 2) pinchRef.current.active = false;
+    if (e.touches.length === 0) panRef.current.active = false;
+  };
+
+  // ---- Mouse drag pan ----
+  const onMouseDown = (e) => {
+    if (!cameraOn || zoom <= 1 || e.button !== 0) return;
+    panRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startTx: tx,
+      startTy: ty,
+      moved: false,
+    };
+  };
+  const onMouseMove = (e) => {
+    if (!panRef.current.active) return;
+    const nx = panRef.current.startTx + (e.clientX - panRef.current.startX);
+    const ny = panRef.current.startTy + (e.clientY - panRef.current.startY);
+    const p = clampPan(nx, ny);
+    setTx(p.x);
+    setTy(p.y);
+  };
+  const endDrag = () => {
+    panRef.current.active = false;
+  };
+
+  // Re-clamp pan if zoom changes via slider/buttons (so if zoom drops to <=1
+  // the image snaps back to center).
+  useEffect(() => {
+    const p = clampPan(tx, ty, zoom);
+    if (p.x !== tx || p.y !== ty) {
+      setTx(p.x);
+      setTy(p.y);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom]);
 
   const mp = useMediaPipe(videoRef, {
     enabled: cameraOn && showSkeleton,
@@ -291,19 +460,35 @@ export default function SignCamera({
 
   return (
     <div
+      ref={containerRef}
       data-testid={`${testIdPrefix}-container`}
+      onWheel={onWheel}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={endDrag}
+      onMouseLeave={endDrag}
+      onDoubleClick={resetZoom}
+      style={{ touchAction: zoom > 1 ? "none" : "pinch-zoom" }}
       className={`relative w-full overflow-hidden rounded-2xl border ${
         recording ? "border-red-400 recording-ring" : "border-slate-200 dark:border-slate-700"
-      } bg-slate-950 mx-auto ${isVertical ? "aspect-[9/16] max-w-md" : "aspect-video"}`}
+      } bg-slate-950 mx-auto select-none ${
+        zoom > 1 ? (panRef.current?.active ? "cursor-grabbing" : "cursor-grab") : ""
+      } ${isVertical ? "aspect-[9/16] max-w-md" : "aspect-video"}`}
     >
       {/* Zoom-able layer: contains video + overlay so they stay aligned */}
       <div
+        ref={zoomLayerRef}
         data-testid={`${testIdPrefix}-zoom-layer`}
-        className="absolute inset-0"
+        className="absolute inset-0 will-change-transform"
         style={{
-          transform: `scale(${zoom})`,
+          transform: `translate3d(${tx}px, ${ty}px, 0) scale(${zoom})`,
           transformOrigin: "center center",
-          transition: "transform 200ms ease-out",
+          transition: animating
+            ? "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)"
+            : "transform 90ms linear",
         }}
       >
         <video
@@ -311,7 +496,8 @@ export default function SignCamera({
           playsInline
           muted
           data-testid={`${testIdPrefix}-video`}
-          className={`absolute inset-0 w-full h-full object-cover ${
+          draggable={false}
+          className={`absolute inset-0 w-full h-full object-cover pointer-events-none ${
             facing === "user" ? "[transform:scaleX(-1)]" : ""
           }`}
         />
@@ -436,8 +622,12 @@ export default function SignCamera({
             )}
             <button
               data-testid={`${testIdPrefix}-zoom-out`}
-              onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)))}
-              disabled={zoom <= 0.5}
+              onClick={() => {
+                setAnimating(true);
+                zoomTo(zoom - 0.2);
+                setTimeout(() => setAnimating(false), 220);
+              }}
+              disabled={zoom <= ZOOM_MIN}
               className="p-2 rounded-full bg-black/55 text-white hover:bg-black/75 backdrop-blur-md transition-all duration-200 disabled:opacity-40"
               aria-label="Alejar"
               title="Alejar (zoom out)"
@@ -446,8 +636,12 @@ export default function SignCamera({
             </button>
             <button
               data-testid={`${testIdPrefix}-zoom-in`}
-              onClick={() => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)))}
-              disabled={zoom >= 2}
+              onClick={() => {
+                setAnimating(true);
+                zoomTo(zoom + 0.2);
+                setTimeout(() => setAnimating(false), 220);
+              }}
+              disabled={zoom >= ZOOM_MAX}
               className="p-2 rounded-full bg-black/55 text-white hover:bg-black/75 backdrop-blur-md transition-all duration-200 disabled:opacity-40"
               aria-label="Acercar"
               title="Acercar (zoom in)"
@@ -487,8 +681,12 @@ export default function SignCamera({
           className="absolute right-3 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center gap-2 bg-black/55 backdrop-blur-md rounded-full px-2 py-3"
         >
           <button
-            onClick={() => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)))}
-            disabled={zoom >= 2}
+            onClick={() => {
+              setAnimating(true);
+              zoomTo(zoom + 0.2);
+              setTimeout(() => setAnimating(false), 220);
+            }}
+            disabled={zoom >= ZOOM_MAX}
             className="text-white hover:bg-white/10 rounded-full p-1 disabled:opacity-40"
             aria-label="Acercar"
           >
@@ -496,11 +694,14 @@ export default function SignCamera({
           </button>
           <input
             type="range"
-            min="0.5"
-            max="2"
+            min={ZOOM_MIN}
+            max={ZOOM_MAX}
             step="0.05"
             value={zoom}
-            onChange={(e) => setZoom(parseFloat(e.target.value))}
+            onChange={(e) => {
+              setAnimating(false);
+              zoomTo(parseFloat(e.target.value));
+            }}
             className="h-24 cursor-pointer accent-white"
             style={{
               writingMode: "vertical-lr",
@@ -511,14 +712,22 @@ export default function SignCamera({
             aria-label="Nivel de zoom"
           />
           <button
-            onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)))}
-            disabled={zoom <= 0.5}
+            onClick={() => {
+              setAnimating(true);
+              zoomTo(zoom - 0.2);
+              setTimeout(() => setAnimating(false), 220);
+            }}
+            disabled={zoom <= ZOOM_MIN}
             className="text-white hover:bg-white/10 rounded-full p-1 disabled:opacity-40"
             aria-label="Alejar"
           >
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
-          <span className="text-[10px] text-white/80 font-mono tabular-nums">
+          <span
+            className="text-[10px] text-white/80 font-mono tabular-nums cursor-pointer hover:text-white"
+            onClick={resetZoom}
+            title="Restablecer zoom (doble clic en imagen)"
+          >
             {Math.round(zoom * 100)}%
           </span>
         </div>
