@@ -15,6 +15,8 @@ import {
   Activity,
   ZoomIn,
   ZoomOut,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react";
 import { useMediaPipe, drawLandmarks } from "../hooks/useMediaPipe";
 
@@ -403,6 +405,9 @@ export default function SignCamera({
                 <Activity className="w-3 h-3 mr-1" /> MediaPipe
               </Badge>
             )}
+            {showSkeleton && mp.ready && cameraOn && (
+              <QualityBadge quality={mp.quality} />
+            )}
             {busy && (
               <Badge className="bg-black/60 text-white border-0 backdrop-blur-md">
                 <Loader2 className="w-3 h-3 mr-1 animate-spin" /> Analizando…
@@ -573,5 +578,54 @@ export default function SignCamera({
         </div>
       )}
     </div>
+  );
+}
+
+const ISSUE_LABEL = {
+  "face-missing": "Cara fuera de cuadro",
+  "face-cropped": "Cara cortada en el borde",
+  "hands-missing": "Manos no visibles",
+  "hand-cropped": "Mano cortada en el borde",
+  "torso-not-visible": "Acerca el torso",
+};
+
+function QualityBadge({ quality }) {
+  if (!quality) return null;
+  const { score, level, issues } = quality;
+  const map = {
+    good: {
+      bg: "bg-emerald-500/90",
+      icon: <CheckCircle2 className="w-3 h-3 mr-1" />,
+      text: "Excelente",
+    },
+    fair: {
+      bg: "bg-amber-500/90",
+      icon: <AlertCircle className="w-3 h-3 mr-1" />,
+      text: "Aceptable",
+    },
+    poor: {
+      bg: "bg-red-500/90",
+      icon: <AlertTriangle className="w-3 h-3 mr-1" />,
+      text: "Encuadre pobre",
+    },
+    off: {
+      bg: "bg-slate-500/80",
+      icon: <AlertCircle className="w-3 h-3 mr-1" />,
+      text: "Calculando…",
+    },
+  };
+  const cfg = map[level] || map.off;
+  const tip = issues.map((i) => ISSUE_LABEL[i] || i).join(" · ");
+  return (
+    <Badge
+      data-testid="quality-badge"
+      data-level={level}
+      title={tip || `Calidad ${score}/100`}
+      className={`${cfg.bg} text-white border-0 cursor-help`}
+    >
+      {cfg.icon}
+      {cfg.text}
+      <span className="ml-1 font-mono text-[10px] opacity-80">{score}</span>
+    </Badge>
   );
 }

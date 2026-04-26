@@ -43,6 +43,11 @@ export function useMediaPipe(videoRef, { enabled = true, onMotion } = {}) {
     pose: null,
   });
   const [moving, setMoving] = useState(false);
+  const [quality, setQuality] = useState({
+    score: 0, // 0..100
+    level: "off", // off | poor | fair | good
+    issues: [], // ["face-missing", "hand-cropped", "low-light"]
+  });
 
   // load models once
   useEffect(() => {
@@ -131,6 +136,59 @@ export function useMediaPipe(videoRef, { enabled = true, onMotion } = {}) {
       const pose = pRes?.landmarks?.[0] || null;
       setLandmarks({ hands, face, pose });
 
+      // ---------- Quality assessment ----------
+      const issues = [];
+      let score = 0;
+
+      // Face presence + framing
+      if (face) {
+        score += 35;
+        const inBounds = face.every(
+          (p) => p.x > 0.02 && p.x < 0.98 && p.y > 0.02 && p.y < 0.98,
+        );
+        if (!inBounds) issues.push("face-cropped");
+        else score += 10;
+      } else {
+        issues.push("face-missing");
+      }
+
+      // Hands presence + framing
+      if (hands.length === 0) {
+        issues.push("hands-missing");
+      } else {
+        score += 25 * Math.min(2, hands.length); // 25 per hand up to 50
+        const anyCropped = hands.some((h) =>
+          h.some(
+            (p) =>
+              p.x < 0.02 || p.x > 0.98 || p.y < 0.02 || p.y > 0.98,
+          ),
+        );
+        if (anyCropped) issues.push("hand-cropped");
+        else score += 5;
+      }
+
+      // Shoulders visible (pose landmarks 11/12)
+      if (pose && pose[11] && pose[12]) {
+        const visible = (pose[11].visibility ?? 1) > 0.5 && (pose[12].visibility ?? 1) > 0.5;
+        if (visible) score += 10;
+        else issues.push("torso-not-visible");
+      }
+
+      score = Math.max(0, Math.min(100, score));
+      const level =
+        score >= 75 ? "good" : score >= 45 ? "fair" : "poor";
+      setQuality((prev) => {
+        if (
+          prev.score === score &&
+          prev.level === level &&
+          prev.issues.length === issues.length &&
+          prev.issues.every((x, i) => x === issues[i])
+        ) {
+          return prev;
+        }
+        return { score, level, issues };
+      });
+
       // motion signal: average displacement of hand landmarks vs last sample
       const flat = hands.flat().map((p) => [p.x, p.y]);
       const prev = lastSampleRef.current;
@@ -203,7 +261,7 @@ export function drawLandmarks(canvas, landmarks, { mirror = true, color = "#3B82
     }
   };
 
-  // Pose: include head/face connections + body + arms + torso
+  // Pose: head + neck + shoulders + arms + torso (NO legs / waist-up only)
   const POSE_CONN = [
     // Face mini connections (visible head)
     [0, 1], [1, 2], [2, 3], [3, 7],
@@ -214,12 +272,10 @@ export function drawLandmarks(canvas, landmarks, { mirror = true, color = "#3B82
     [12, 14], [14, 16], [16, 18], [16, 20], [16, 22], [18, 20],
     // Shoulders + torso
     [11, 12], [11, 23], [12, 24], [23, 24],
-    // Legs (lightly drawn)
-    [23, 25], [24, 26],
   ];
   drawConnections(landmarks.pose, POSE_CONN, "rgba(16, 185, 129, 0.95)", 3.5);
   drawPoints(
-    landmarks.pose ? landmarks.pose.slice(0, 27) : null,
+    landmarks.pose ? landmarks.pose.slice(0, 25) : null,
     3.5,
     "#10b981",
   );
