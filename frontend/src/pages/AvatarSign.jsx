@@ -4,240 +4,310 @@ import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Textarea } from "../components/ui/textarea";
-import { User, Loader2, Play, Square } from "lucide-react";
+import {
+  User,
+  Loader2,
+  Play,
+  Square,
+  RotateCcw,
+  Sparkles,
+  Gauge,
+} from "lucide-react";
 import { textToSign } from "../lib/api";
 import { toast } from "sonner";
+import { buildAvatar } from "../lib/avatarRig";
+import { PoseAnimator, POSE_KEYS, poseForWord } from "../lib/avatarPoses";
 
-/**
- * AvatarSign — minimalist humanoid 3D model (head/torso/arms/hands)
- * built from primitive shapes. Plays simple sign-like motions:
- *  - Wave (greeting)
- *  - Heart (love)
- *  - Beats chest (yes/no)
- *  - Both hands open (please/help)
- * Driven by `motionQueue`: array of motion ids to play sequentially.
- */
+const SHORTCUTS = [
+  "Hola", "Adiós", "Sí", "No", "Por favor", "Gracias",
+  "Te quiero", "Yo", "Tú", "Comer", "Beber", "Casa", "Pensar",
+  "Bien", "Mal", "Ayuda",
+];
+
 export default function AvatarSign() {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const rendererRef = useRef(null);
-  const armsRef = useRef({});
-  const animRef = useRef(null);
+  const animatorRef = useRef(null);
+  const camRef = useRef(null);
+  const animFrameRef = useRef(null);
+
+  // Mouse orbit state
+  const orbitRef = useRef({
+    azim: 0,
+    polar: 1.45,
+    dist: 3.4,
+    dragging: false,
+    lastX: 0,
+    lastY: 0,
+  });
 
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [playing, setPlaying] = useState(false);
-  const queueRef = useRef([]);
-  const tRef = useRef(0);
+  const [currentWord, setCurrentWord] = useState("");
+  const [speed, setSpeed] = useState(1.0);
 
-  // Init Three.js scene
+  // ----- Initialize Three.js scene -----
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
     const w = mount.clientWidth;
     const h = mount.clientHeight;
+
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf1f5f9);
     sceneRef.current = scene;
 
-    const cam = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
-    cam.position.set(0, 1.4, 4);
-    cam.lookAt(0, 1.2, 0);
+    // Soft vertical-gradient background
+    const canvas = document.createElement("canvas");
+    canvas.width = 16;
+    canvas.height = 256;
+    const ctx = canvas.getContext("2d");
+    const grad = ctx.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0, "#1e293b");
+    grad.addColorStop(0.6, "#475569");
+    grad.addColorStop(1, "#cbd5e1");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 16, 256);
+    const bgTex = new THREE.CanvasTexture(canvas);
+    bgTex.colorSpace = THREE.SRGBColorSpace;
+    scene.background = bgTex;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // Camera
+    const cam = new THREE.PerspectiveCamera(34, w / h, 0.1, 100);
+    cam.position.set(0, 1.65, 3.4);
+    cam.lookAt(0, 1.55, 0);
+    camRef.current = cam;
+
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     mount.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Lighting
-    scene.add(new THREE.HemisphereLight(0xffffff, 0xcbd5e1, 0.8));
-    const dir = new THREE.DirectionalLight(0xffffff, 0.7);
-    dir.position.set(2, 5, 3);
-    scene.add(dir);
+    // ----- Lighting (3-point studio) -----
+    scene.add(new THREE.AmbientLight(0xffffff, 0.35));
 
-    // Avatar (built from primitives)
-    const skin = new THREE.MeshStandardMaterial({ color: 0xfde2c5, roughness: 0.6 });
-    const cloth = new THREE.MeshStandardMaterial({ color: 0x002fa7, roughness: 0.4 });
+    const key = new THREE.DirectionalLight(0xffffff, 1.4);
+    key.position.set(2.5, 4.2, 2.5);
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.camera.near = 0.5;
+    key.shadow.camera.far = 12;
+    key.shadow.camera.left = -3;
+    key.shadow.camera.right = 3;
+    key.shadow.camera.top = 4;
+    key.shadow.camera.bottom = -1;
+    key.shadow.bias = -0.0005;
+    key.shadow.radius = 4;
+    scene.add(key);
 
-    // Head
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 24, 24), skin);
-    head.position.set(0, 1.95, 0);
-    scene.add(head);
-    // Eyes
-    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x0f172a });
-    const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), eyeMat);
-    eyeL.position.set(-0.1, 2.0, 0.27);
-    const eyeR = eyeL.clone();
-    eyeR.position.x = 0.1;
-    scene.add(eyeL, eyeR);
-    // Mouth (small smile)
-    const mouth = new THREE.Mesh(
-      new THREE.BoxGeometry(0.12, 0.012, 0.01),
-      new THREE.MeshStandardMaterial({ color: 0x9b1c1c }),
-    );
-    mouth.position.set(0, 1.85, 0.3);
-    scene.add(mouth);
+    const fill = new THREE.DirectionalLight(0x88a8ff, 0.55);
+    fill.position.set(-3, 2, 1.5);
+    scene.add(fill);
 
-    // Torso
-    const torso = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.36, 0.32, 0.85, 16),
-      cloth,
-    );
-    torso.position.set(0, 1.18, 0);
-    scene.add(torso);
-    // Neck
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.15, 12), skin);
-    neck.position.set(0, 1.7, 0);
-    scene.add(neck);
+    const rim = new THREE.SpotLight(0xffe6c9, 1.6, 12, Math.PI / 6, 0.4, 1);
+    rim.position.set(-1.5, 3.5, -3);
+    rim.target.position.set(0, 1.5, 0);
+    scene.add(rim, rim.target);
 
-    // Arms — pivot at shoulder so we can rotate them
-    const buildArm = (side) => {
-      const pivot = new THREE.Group();
-      pivot.position.set(side * 0.42, 1.55, 0);
+    // Hemisphere bounce
+    const hemi = new THREE.HemisphereLight(0xeaf2ff, 0x453525, 0.35);
+    scene.add(hemi);
 
-      const upper = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.07, 0.07, 0.5, 12),
-        cloth,
-      );
-      upper.position.y = -0.25;
-      pivot.add(upper);
+    // ----- Floor (catches the soft shadow) -----
+    const floorMat = new THREE.MeshStandardMaterial({
+      color: 0x9aa6b8,
+      roughness: 0.9,
+      metalness: 0.0,
+    });
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(3.4, 64), floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = 0;
+    floor.receiveShadow = true;
+    scene.add(floor);
 
-      const elbow = new THREE.Group();
-      elbow.position.y = -0.5;
-      pivot.add(elbow);
+    // Soft fake-AO ring under feet
+    const aoMat = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.25,
+    });
+    const aoGeom = new THREE.RingGeometry(0.05, 1.2, 64);
+    const ao = new THREE.Mesh(aoGeom, aoMat);
+    ao.rotation.x = -Math.PI / 2;
+    ao.position.y = 0.001;
+    scene.add(ao);
 
-      const fore = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.06, 0.06, 0.45, 12),
-        skin,
-      );
-      fore.position.y = -0.225;
-      elbow.add(fore);
+    // ----- Avatar -----
+    const { root, bones } = buildAvatar();
+    root.position.y = 0;
+    root.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+      }
+    });
+    scene.add(root);
 
-      const hand = new THREE.Mesh(
-        new THREE.SphereGeometry(0.085, 16, 16),
-        skin,
-      );
-      hand.position.y = -0.5;
-      elbow.add(hand);
+    const animator = new PoseAnimator(bones);
+    animatorRef.current = animator;
+    animator.onWord = (word) => setCurrentWord(word || "");
 
-      scene.add(pivot);
-      return { pivot, elbow, hand };
+    // ----- Mouse orbit -----
+    const dom = renderer.domElement;
+    dom.style.cursor = "grab";
+    const onDown = (e) => {
+      orbitRef.current.dragging = true;
+      orbitRef.current.lastX = e.clientX;
+      orbitRef.current.lastY = e.clientY;
+      dom.style.cursor = "grabbing";
     };
-
-    armsRef.current = {
-      L: buildArm(-1),
-      R: buildArm(1),
+    const onUp = () => {
+      orbitRef.current.dragging = false;
+      dom.style.cursor = "grab";
     };
-    // Resting pose
-    armsRef.current.L.pivot.rotation.z = -0.1;
-    armsRef.current.R.pivot.rotation.z = 0.1;
+    const onMove = (e) => {
+      if (!orbitRef.current.dragging) return;
+      const dx = e.clientX - orbitRef.current.lastX;
+      const dy = e.clientY - orbitRef.current.lastY;
+      orbitRef.current.lastX = e.clientX;
+      orbitRef.current.lastY = e.clientY;
+      orbitRef.current.azim -= dx * 0.008;
+      orbitRef.current.polar = Math.max(
+        0.6,
+        Math.min(2.2, orbitRef.current.polar - dy * 0.006),
+      );
+    };
+    const onWheel = (e) => {
+      e.preventDefault();
+      orbitRef.current.dist = Math.max(
+        2.4,
+        Math.min(7, orbitRef.current.dist + e.deltaY * 0.003),
+      );
+    };
+    dom.addEventListener("mousedown", onDown);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("mousemove", onMove);
+    dom.addEventListener("wheel", onWheel, { passive: false });
 
-    // Animation loop
+    // Touch (basic single-finger orbit + pinch zoom)
+    let touchPinch = null;
+    const onTStart = (e) => {
+      if (e.touches.length === 1) {
+        orbitRef.current.dragging = true;
+        orbitRef.current.lastX = e.touches[0].clientX;
+        orbitRef.current.lastY = e.touches[0].clientY;
+      } else if (e.touches.length === 2) {
+        const a = e.touches[0];
+        const b = e.touches[1];
+        touchPinch = {
+          dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1,
+          startDist: orbitRef.current.dist,
+        };
+      }
+    };
+    const onTMove = (e) => {
+      if (e.touches.length === 1 && orbitRef.current.dragging) {
+        const t = e.touches[0];
+        const dx = t.clientX - orbitRef.current.lastX;
+        const dy = t.clientY - orbitRef.current.lastY;
+        orbitRef.current.lastX = t.clientX;
+        orbitRef.current.lastY = t.clientY;
+        orbitRef.current.azim -= dx * 0.008;
+        orbitRef.current.polar = Math.max(
+          0.6,
+          Math.min(2.2, orbitRef.current.polar - dy * 0.006),
+        );
+      } else if (e.touches.length === 2 && touchPinch) {
+        const a = e.touches[0];
+        const b = e.touches[1];
+        const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
+        const ratio = touchPinch.dist / d;
+        orbitRef.current.dist = Math.max(
+          2.4,
+          Math.min(7, touchPinch.startDist * ratio),
+        );
+      }
+    };
+    const onTEnd = () => {
+      orbitRef.current.dragging = false;
+      touchPinch = null;
+    };
+    dom.addEventListener("touchstart", onTStart, { passive: true });
+    dom.addEventListener("touchmove", onTMove, { passive: true });
+    dom.addEventListener("touchend", onTEnd);
+
+    // ----- Animation loop -----
     const clock = new THREE.Clock();
-    const render = () => {
-      const dt = clock.getDelta();
-      tRef.current += dt;
-      tickMotion(tRef.current);
-      renderer.render(scene, cam);
-      animRef.current = requestAnimationFrame(render);
-    };
-    render();
+    const tick = () => {
+      const dt = Math.min(0.05, clock.getDelta());
+      animator.step(dt);
 
-    const handleResize = () => {
+      // Orbit camera (spherical)
+      const o = orbitRef.current;
+      const cx = Math.sin(o.azim) * Math.sin(o.polar) * o.dist;
+      const cy = Math.cos(o.polar) * o.dist + 1.4;
+      const cz = Math.cos(o.azim) * Math.sin(o.polar) * o.dist;
+      cam.position.set(cx, cy, cz);
+      cam.lookAt(0, 1.55, 0);
+
+      renderer.render(scene, cam);
+      animFrameRef.current = requestAnimationFrame(tick);
+    };
+    tick();
+
+    // Resize
+    const onResize = () => {
       const w2 = mount.clientWidth;
       const h2 = mount.clientHeight;
       cam.aspect = w2 / h2;
       cam.updateProjectionMatrix();
       renderer.setSize(w2, h2);
     };
-    window.addEventListener("resize", handleResize);
+    const ro = new ResizeObserver(onResize);
+    ro.observe(mount);
+    window.addEventListener("resize", onResize);
 
     return () => {
-      cancelAnimationFrame(animRef.current);
-      window.removeEventListener("resize", handleResize);
-      renderer.dispose();
-      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
+      cancelAnimationFrame(animFrameRef.current);
+      window.removeEventListener("resize", onResize);
+      ro.disconnect();
+      dom.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("mousemove", onMove);
+      dom.removeEventListener("wheel", onWheel);
+      dom.removeEventListener("touchstart", onTStart);
+      dom.removeEventListener("touchmove", onTMove);
+      dom.removeEventListener("touchend", onTEnd);
+      try {
+        renderer.dispose();
+        if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
+      } catch {}
     };
   }, []);
 
-  // Motion library
-  const motionsRef = useRef({
-    idle: (t, a) => {
-      const sway = Math.sin(t * 1.2) * 0.04;
-      a.L.pivot.rotation.z = -0.1 + sway;
-      a.R.pivot.rotation.z = 0.1 - sway;
-    },
-    wave: (t, a) => {
-      a.R.pivot.rotation.z = 1.2 + Math.sin(t * 6) * 0.4;
-      a.R.pivot.rotation.x = -0.4;
-      a.R.elbow.rotation.x = -0.6;
-    },
-    heart: (t, a) => {
-      a.L.pivot.rotation.z = -0.7 - Math.sin(t * 3) * 0.05;
-      a.R.pivot.rotation.z = 0.7 + Math.sin(t * 3) * 0.05;
-      a.L.elbow.rotation.x = -1.4;
-      a.R.elbow.rotation.x = -1.4;
-    },
-    chest: (t, a) => {
-      a.R.pivot.rotation.z = 0.2;
-      a.R.elbow.rotation.x = -1.6;
-      a.R.pivot.rotation.x = Math.sin(t * 5) * 0.2;
-    },
-    open: (t, a) => {
-      a.L.pivot.rotation.z = -0.6;
-      a.R.pivot.rotation.z = 0.6;
-      a.L.elbow.rotation.x = -1.2 + Math.sin(t * 2) * 0.3;
-      a.R.elbow.rotation.x = -1.2 + Math.sin(t * 2 + 0.3) * 0.3;
-    },
-    point: (t, a) => {
-      a.R.pivot.rotation.z = 1.2;
-      a.R.elbow.rotation.x = -0.4;
-      a.R.pivot.rotation.x = -0.5;
-    },
-  });
+  // Update animator speed when slider moves
+  useEffect(() => {
+    if (animatorRef.current) animatorRef.current.setSpeed(speed);
+  }, [speed]);
 
-  const tickMotion = (t) => {
-    const a = armsRef.current;
-    if (!a.L) return;
-    const queue = queueRef.current;
-    if (queue.length === 0) {
-      motionsRef.current.idle(t, a);
-      return;
-    }
-    const cur = queue[0];
-    const elapsed = t - cur.startedAt;
-    if (elapsed > cur.duration) {
-      queue.shift();
-      if (queue.length) queue[0].startedAt = t;
-      else setPlaying(false);
-      return;
-    }
-    (motionsRef.current[cur.id] || motionsRef.current.idle)(t, a);
-  };
-
-  const motionForWord = (w) => {
-    const k = w.toLowerCase().replace(/[^a-záéíóúñ]/gi, "");
-    if (/(hola|adios|saludo|hello|bye)/.test(k)) return "wave";
-    if (/(amor|querer|love|corazón)/.test(k)) return "heart";
-    if (/(sí|si|no|yes|claro)/.test(k)) return "chest";
-    if (/(ayuda|favor|please|help|abierto)/.test(k)) return "open";
-    if (/(yo|tú|tu|allí|alli|este|ese)/.test(k)) return "point";
-    return "open";
-  };
-
-  const enqueue = (steps) => {
-    const list = (steps || []).slice(0, 8).map((s) => ({
-      id: motionForWord(s.word || ""),
-      word: s.word,
-      duration: 1.6,
-      startedAt: 0,
-    }));
-    if (!list.length) return;
-    list[0].startedAt = tRef.current;
-    queueRef.current = list;
+  // ---- Actions ----
+  const playWords = (words) => {
+    const animator = animatorRef.current;
+    if (!animator) return;
+    const seq = words.map((w) => ({ word: typeof w === "string" ? w : w.word }));
+    animator.setQueue(seq);
     setPlaying(true);
+    // Clear "playing" state shortly after the last pose finishes
+    const totalMs = seq.length * 1300 + 900;
+    setTimeout(() => setPlaying(false), totalMs / Math.max(0.4, speed));
   };
 
   const handleGenerate = async () => {
@@ -246,17 +316,42 @@ export default function AvatarSign() {
     try {
       const res = await textToSign(text.trim(), "auto");
       setResult(res);
-      enqueue(res.steps);
+      const words = (res.steps || []).map((s) => s.word).filter(Boolean);
+      if (words.length === 0) {
+        // Fall back to splitting the user input
+        playWords(
+          text
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean)
+            .slice(0, 12),
+        );
+      } else {
+        playWords(words.slice(0, 12));
+      }
     } catch (e) {
-      toast.error("Error", { description: e?.response?.data?.detail || e?.message });
+      toast.error("Error", {
+        description: e?.response?.data?.detail || e?.message,
+      });
     } finally {
       setBusy(false);
     }
   };
 
+  const handleQuickPose = (w) => {
+    setText(w);
+    playWords([w]);
+  };
+
   const stop = () => {
-    queueRef.current = [];
+    animatorRef.current?.clear();
     setPlaying(false);
+  };
+
+  const resetCam = () => {
+    orbitRef.current.azim = 0;
+    orbitRef.current.polar = 1.45;
+    orbitRef.current.dist = 3.4;
   };
 
   return (
@@ -265,30 +360,80 @@ export default function AvatarSign() {
         <span className="w-10 h-10 rounded-md bg-[#002FA7] text-white flex items-center justify-center shrink-0">
           <User className="w-5 h-5" />
         </span>
-        <div>
-          <h1 className="font-display text-3xl sm:text-4xl font-semibold">
+        <div className="flex-1">
+          <h1 className="font-display text-3xl sm:text-4xl font-semibold text-slate-900 dark:text-slate-100">
             Avatar 3D
           </h1>
           <p className="text-slate-600 dark:text-slate-300 mt-1">
-            Escribe un texto y mira al avatar reproducir los signos.
+            Avatar humanoide articulado con 14 poses, expresiones faciales,
+            parpadeo y respiración. Arrastra para rotar la cámara, rueda para
+            zoom.
           </p>
         </div>
+        <Badge className="bg-emerald-100 text-emerald-700 border-0 hidden sm:inline-flex">
+          <Sparkles className="w-3.5 h-3.5 mr-1" /> Mejorado
+        </Badge>
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          <div
-            ref={mountRef}
-            data-testid="avatar-canvas"
-            className="aspect-video w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100"
-          />
-          {playing && queueRef.current[0] && (
-            <div className="mt-3 text-center">
-              <Badge className="bg-[#002FA7] text-white border-0 text-base px-4 py-1.5">
-                Signando: <strong className="ml-1.5">{queueRef.current[0].word}</strong>
+          <div className="relative">
+            <div
+              ref={mountRef}
+              data-testid="avatar-canvas"
+              className="aspect-video w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-lg cursor-grab"
+              style={{ minHeight: 380 }}
+            />
+
+            {/* Camera reset + speed badge */}
+            <div className="absolute top-3 right-3 flex items-center gap-2">
+              <Badge
+                data-testid="avatar-speed-badge"
+                className="bg-black/55 text-white border-0 backdrop-blur-md"
+              >
+                <Gauge className="w-3 h-3 mr-1" /> {speed.toFixed(2)}x
               </Badge>
+              <button
+                data-testid="avatar-reset-camera"
+                onClick={resetCam}
+                title="Restablecer cámara"
+                className="p-2 rounded-full bg-black/55 text-white hover:bg-black/75 backdrop-blur-md transition"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
             </div>
-          )}
+
+            {/* Word being signed */}
+            {currentWord && playing && (
+              <div
+                data-testid="avatar-current-word"
+                className="absolute left-1/2 -translate-x-1/2 bottom-4 fade-in-up"
+              >
+                <Badge className="bg-[#002FA7] text-white border-0 text-base px-4 py-1.5 shadow-lg">
+                  Signando: <strong className="ml-1.5">{currentWord}</strong>
+                </Badge>
+              </div>
+            )}
+          </div>
+
+          {/* Quick poses */}
+          <div className="mt-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+              Probar una seña rápida
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {SHORTCUTS.map((w) => (
+                <button
+                  key={w}
+                  data-testid={`avatar-quick-${w.toLowerCase().replace(/\s+/g, "-")}`}
+                  onClick={() => handleQuickPose(w)}
+                  className="px-3 py-1.5 rounded-full text-sm bg-slate-100 hover:bg-[#002FA7] hover:text-white text-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-[#002FA7] dark:hover:text-white border border-slate-200 dark:border-slate-700 transition-all"
+                >
+                  {w}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         <Card className="p-5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-xl h-fit">
@@ -301,7 +446,7 @@ export default function AvatarSign() {
             onChange={(e) => setText(e.target.value)}
             placeholder="Hola, te quiero mucho"
             rows={4}
-            className="border-slate-300 mb-3"
+            className="border-slate-300 dark:border-slate-700 mb-3"
           />
           <div className="flex gap-2">
             <Button
@@ -321,10 +466,36 @@ export default function AvatarSign() {
               )}
             </Button>
             {playing && (
-              <Button onClick={stop} variant="outline" className="h-11">
+              <Button
+                data-testid="avatar-stop"
+                onClick={stop}
+                variant="outline"
+                className="h-11"
+                title="Detener"
+              >
                 <Square className="w-4 h-4" />
               </Button>
             )}
+          </div>
+
+          {/* Speed slider */}
+          <div className="mt-4">
+            <label className="text-xs uppercase tracking-wide text-slate-500 flex items-center justify-between">
+              <span>Velocidad</span>
+              <span className="font-mono text-slate-700 dark:text-slate-300">
+                {speed.toFixed(2)}x
+              </span>
+            </label>
+            <input
+              data-testid="avatar-speed"
+              type="range"
+              min="0.4"
+              max="2.0"
+              step="0.05"
+              value={speed}
+              onChange={(e) => setSpeed(parseFloat(e.target.value))}
+              className="w-full mt-1.5 accent-[#002FA7]"
+            />
           </div>
 
           {result && (
@@ -336,16 +507,28 @@ export default function AvatarSign() {
                 {result.summary}
               </p>
               <p className="text-xs text-slate-500 mt-2">
-                {result.steps?.length} signos en cola
+                {result.steps?.length || 0} signos en cola
               </p>
             </div>
           )}
 
-          <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800">
-            <p className="text-xs text-slate-500">
-              <strong>Nota:</strong> el avatar usa animaciones simbólicas
-              estilizadas (saludar, corazón, abrir manos, señalar). No reemplaza
-              a un signante humano — sirve como ayuda visual de apoyo.
+          <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 space-y-1">
+            <p>
+              <strong>Anatomía:</strong> cabeza, cuello, torso, hombros 3 ejes,
+              codo, muñeca y 5 dedos articulados (3 falanges) por mano.
+            </p>
+            <p>
+              <strong>Vida:</strong> respiración, parpadeo aleatorio, expresión
+              facial sincronizada.
+            </p>
+            <p>
+              <strong>Cámara:</strong> arrastrar para rotar · rueda/pellizcar
+              para zoom · doble clic en{" "}
+              <RotateCcw className="inline w-3 h-3" /> para restablecer.
+            </p>
+            <p className="text-amber-700 dark:text-amber-300 mt-2">
+              <strong>Nota:</strong> {POSE_KEYS.length} poses estilizadas. Es
+              una ayuda visual — un signante humano sigue siendo la referencia.
             </p>
           </div>
         </Card>

@@ -68,11 +68,18 @@
 - Iter 7: Phase 2 Block B — backend 15/15 ✅, frontend 95% (only 2 minor polish items, fixed)
 - Test file: /app/backend/tests/test_iter7_phase2_block_b.py
 
+### Phase 2 — Block C (Feb 2026)
+- **Avatar 3D realista** (`/avatar`) — anatomical humanoid built in Three.js with: head (with hair, eyes that blink, brows, lips, nose, cheeks, ears), neck, torso, articulated **shoulders (3-axis), elbows, wrists, and 5 fingers per hand with 3 phalanges each**
+- Studio lighting (key + fill + rim + hemi), soft contact shadow, gradient background, ACES tone mapping
+- 17 stylized poses (Hola, Adiós, Sí, No, Por favor, Gracias, Te quiero/ILY, Yo, Tú, Comer, Beber, Casa, Pensar, Bien, Mal, Ayuda, idle) with smooth slerp interpolation
+- Idle life: breathing motion on chest, random blinks every 2-7s, subtle body sway
+- Speed slider (0.4×-2.0×), camera orbit (mouse drag + pinch zoom + reset), quick-pose chips, current-word badge
+- Pose system: `lib/avatarRig.js` (bone hierarchy) + `lib/avatarPoses.js` (PoseAnimator + word→pose mapping)
+
 ## Backlog (P1)
-- Real Avatar 3D animations (text → bone/hand keyframes via Three.js skeleton)
-- Admin panel for moderating community-submitted signs
 - TURN server config (currently STUN-only — production guidance in DEPLOY.md)
 - Multi-replica WebRTC signaling (Redis Pub/Sub)
+- Admin panel for moderating community-submitted signs
 - Audio TTS readout of translated text
 - Confidence threshold UI to suppress low-confidence outputs
 
