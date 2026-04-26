@@ -13,6 +13,7 @@ import io
 import uuid
 import time
 import base64
+import shutil
 import pytest
 import requests
 import subprocess
@@ -44,8 +45,9 @@ def http():
 @pytest.fixture(scope="session")
 def tiny_video_path(tmp_path_factory):
     """Generate a tiny black 1-sec mp4 for video upload tests."""
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not available in environment")
     out = tmp_path_factory.mktemp("media") / "tiny.mp4"
-    # Already produced one earlier? Just generate fresh.
     cmd = [
         "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=320x240:d=1",
         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)
@@ -647,6 +649,26 @@ class TestAnalytics:
         else:
             assert after_fs == before_fs
 
+    def test_iter5_practice_attempt_event_recorded(self, http, sample_frames):
+        # Iteration 5: practice/validate records 'practice_attempt' event on success
+        before = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        before_pa = before["by_type"].get("practice_attempt", 0)
+
+        r = http.post(
+            f"{API}/practice/validate",
+            json={"frames": sample_frames[:3], "expected_word": "Hola", "language": "LSE"},
+            timeout=TIMEOUT,
+        )
+        assert r.status_code in (200, 502), r.text
+
+        time.sleep(0.4)
+        after = http.get(f"{API}/analytics/summary", params={"days": 1}, timeout=30).json()
+        after_pa = after["by_type"].get("practice_attempt", 0)
+        if r.status_code == 200:
+            assert after_pa == before_pa + 1
+        else:
+            assert after_pa == before_pa
+
     def test_events_persist_after_history_clear(self, http):
         # Push an event, clear history, verify event count not reduced
         marker = f"TEST_persist_{uuid.uuid4().hex[:8]}"
@@ -666,4 +688,197 @@ class TestAnalytics:
         assert s["totals"]["translations"] == 0
         # But events still include our marker
         assert s["by_type"].get(marker, 0) >= 1
+
+
+# ---------- Iteration 5: Sign of the Day ----------
+class TestSignOfTheDay:
+    def test_sign_of_the_day_returns_entry(self, http):
+        r = http.get(f"{API}/dictionary/sign-of-the-day", timeout=30)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        for k in ("word", "language", "description", "hands", "mouth", "expression"):
+            assert k in data, f"missing {k}"
+        assert isinstance(data["word"], str) and len(data["word"]) > 0
+        assert data["language"] in ("LSE", "LSM", "ASL")
+
+    def test_sign_of_the_day_is_deterministic(self, http):
+        # Two consecutive calls within the same UTC day must return the same entry
+        r1 = http.get(f"{API}/dictionary/sign-of-the-day", timeout=30).json()
+        r2 = http.get(f"{API}/dictionary/sign-of-the-day", timeout=30).json()
+        assert r1 == r2, "sign-of-the-day not deterministic"
+
+    def test_sign_of_the_day_in_dictionary(self, http):
+        r = http.get(f"{API}/dictionary/sign-of-the-day", timeout=30).json()
+        all_items = http.get(f"{API}/dictionary", timeout=30).json()
+        assert any(
+            i["word"] == r["word"] and i["language"] == r["language"] for i in all_items
+        ), "sign-of-the-day must be a real seeded entry"
+
+
+# ---------- Iteration 5: Community Dictionary ----------
+class TestCommunityDictionary:
+    def _valid_payload(self, word_suffix: str = "") -> dict:
+        return {
+            "word": f"TEST_palabra{word_suffix}",
+            "language": "LSE",
+            "description": "Una palabra de prueba enviada por la comunidad.",
+            "hands": "Configuración con la mano dominante en forma de O, palma hacia adelante.",
+            "mouth": "Vocalización silenciosa de la palabra.",
+            "expression": "Neutra, cejas relajadas.",
+            "submitted_by": "tester",
+        }
+
+    def test_submit_valid_returns_ok_and_id(self, http):
+        payload = self._valid_payload(uuid.uuid4().hex[:6])
+        r = http.post(f"{API}/dictionary/submit", json=payload, timeout=30)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data.get("ok") is True
+        assert isinstance(data.get("id"), str) and len(data["id"]) > 0
+
+    def test_submit_then_listed_as_pending(self, http):
+        payload = self._valid_payload(uuid.uuid4().hex[:6])
+        r = http.post(f"{API}/dictionary/submit", json=payload, timeout=30)
+        assert r.status_code == 200
+        new_id = r.json()["id"]
+
+        time.sleep(0.4)
+        r = http.get(f"{API}/dictionary/community", params={"status": "pending"}, timeout=30)
+        assert r.status_code == 200
+        items = r.json()
+        assert isinstance(items, list)
+        match = next((i for i in items if i.get("id") == new_id), None)
+        assert match is not None, "Newly-submitted entry not found in pending list"
+        assert match["status"] == "pending"
+        assert match["word"] == payload["word"]
+        assert match["language"] == payload["language"]
+        # No mongo _id leak
+        assert "_id" not in match
+
+    def test_community_default_status_is_approved(self, http):
+        # Default status=approved -> empty initially (no approval workflow yet)
+        r = http.get(f"{API}/dictionary/community", timeout=30)
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data, list)
+        # All returned items (if any) must be approved
+        for it in data:
+            assert it.get("status") == "approved"
+
+    def test_submit_invalid_short_word_returns_422(self, http):
+        # word min_length=1, but description min_length=4 — send empty word
+        bad = {
+            "word": "",
+            "language": "LSE",
+            "description": "ok descripción",
+            "hands": "manos descripción",
+            "mouth": "",
+            "expression": "",
+        }
+        r = http.post(f"{API}/dictionary/submit", json=bad, timeout=30)
+        assert r.status_code == 422, r.text
+
+    def test_submit_invalid_short_description_returns_422(self, http):
+        bad = self._valid_payload("xx")
+        bad["description"] = "abc"  # min_length=4
+        r = http.post(f"{API}/dictionary/submit", json=bad, timeout=30)
+        assert r.status_code == 422
+
+    def test_submit_invalid_short_hands_returns_422(self, http):
+        bad = self._valid_payload("xx")
+        bad["hands"] = "abc"  # min_length=4
+        r = http.post(f"{API}/dictionary/submit", json=bad, timeout=30)
+        assert r.status_code == 422
+
+    def test_submit_too_long_word_returns_422(self, http):
+        bad = self._valid_payload("xx")
+        bad["word"] = "x" * 81  # max_length=80
+        r = http.post(f"{API}/dictionary/submit", json=bad, timeout=30)
+        assert r.status_code == 422
+
+    def test_submit_missing_required_returns_422(self, http):
+        # Missing 'language'
+        bad = {"word": "Hola", "description": "abcd", "hands": "abcd"}
+        r = http.post(f"{API}/dictionary/submit", json=bad, timeout=30)
+        assert r.status_code == 422
+
+
+# ---------- Iteration 5: Practice Mode ----------
+class TestPracticeValidate:
+    def test_practice_validate_success(self, http, sample_frames):
+        payload = {
+            "frames": sample_frames[:4],
+            "expected_word": "Hola",
+            "language": "LSE",
+        }
+        r = http.post(f"{API}/practice/validate", json=payload, timeout=TIMEOUT)
+        # Acceptable: 200 or 502 (LLM transient)
+        assert r.status_code in (200, 502), f"Unexpected status: {r.status_code} body={r.text[:300]}"
+        if r.status_code == 200:
+            data = r.json()
+            for k in ("score", "verdict", "feedback", "strengths", "weaknesses"):
+                assert k in data, f"missing key {k} in {data}"
+            assert isinstance(data["score"], int)
+            assert 0 <= data["score"] <= 100
+            assert data["verdict"] in ("perfecto", "bueno", "aceptable", "incorrecto")
+            assert isinstance(data["strengths"], list)
+            assert isinstance(data["weaknesses"], list)
+
+    def test_practice_validate_too_few_frames_returns_422(self, http, sample_frames):
+        # min_length=2
+        r = http.post(
+            f"{API}/practice/validate",
+            json={"frames": sample_frames[:1], "expected_word": "Hola"},
+            timeout=30,
+        )
+        assert r.status_code == 422, r.text
+
+    def test_practice_validate_too_many_frames_returns_422(self, http, sample_frames):
+        # max_length=12
+        r = http.post(
+            f"{API}/practice/validate",
+            json={"frames": sample_frames * 3, "expected_word": "Hola"},
+            timeout=30,
+        )
+        assert r.status_code == 422
+
+    def test_practice_validate_missing_expected_returns_422(self, http, sample_frames):
+        r = http.post(
+            f"{API}/practice/validate",
+            json={"frames": sample_frames[:3]},
+            timeout=30,
+        )
+        assert r.status_code == 422
+
+    def test_practice_validate_empty_expected_returns_422(self, http, sample_frames):
+        r = http.post(
+            f"{API}/practice/validate",
+            json={"frames": sample_frames[:3], "expected_word": ""},
+            timeout=30,
+        )
+        assert r.status_code == 422
+
+
+# ---------- Iteration 5: db.community_dictionary does not affect db.translations ----------
+class TestCommunityIsolation:
+    def test_submit_does_not_affect_translations(self, http):
+        # Snapshot translations count
+        before = http.get(f"{API}/history", timeout=30)
+        assert before.status_code == 200
+        before_count = len(before.json())
+
+        payload = {
+            "word": f"TEST_iso_{uuid.uuid4().hex[:6]}",
+            "language": "LSE",
+            "description": "isolation test description",
+            "hands": "isolation test hands description",
+            "mouth": "",
+            "expression": "",
+        }
+        r = http.post(f"{API}/dictionary/submit", json=payload, timeout=30)
+        assert r.status_code == 200
+
+        time.sleep(0.3)
+        after = http.get(f"{API}/history", timeout=30).json()
+        assert len(after) == before_count, "community submission must not write to db.translations"
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import SignCamera from "../components/SignCamera";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -15,6 +15,8 @@ import {
   Smile,
   Eye,
   FileDown,
+  Mic,
+  MicOff,
 } from "lucide-react";
 
 export default function Conversation() {
@@ -25,6 +27,42 @@ export default function Conversation() {
   const [messages, setMessages] = useState([]); // [{from:'signer'|'speaker', text, lang, steps?}]
 
   const [speakerText, setSpeakerText] = useState("");
+  const [listening, setListening] = useState(false);
+  const recogRef = useRef(null);
+
+  const toggleVoice = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      toast.error("Tu navegador no soporta reconocimiento de voz");
+      return;
+    }
+    if (listening) {
+      try {
+        recogRef.current?.stop();
+      } catch {}
+      setListening(false);
+      return;
+    }
+    const r = new SR();
+    r.lang = "es-ES";
+    r.continuous = true;
+    r.interimResults = true;
+    let finalText = "";
+    r.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t + " ";
+        else interim += t;
+      }
+      setSpeakerText((finalText + interim).trim());
+    };
+    r.onend = () => setListening(false);
+    r.onerror = () => setListening(false);
+    recogRef.current = r;
+    r.start();
+    setListening(true);
+  };
 
   async function handleSignerClip(blob, duration) {
     if (!blob || blob.size < 1000) return;
@@ -149,10 +187,32 @@ export default function Conversation() {
             data-testid="conv-speaker-input"
             value={speakerText}
             onChange={(e) => setSpeakerText(e.target.value)}
-            placeholder="Escribe lo que quieres decir…"
+            placeholder="Escribe lo que quieres decir o usa el micrófono…"
             rows={3}
             className="border-slate-300 mb-3"
           />
+          <div className="flex gap-2 mb-3">
+            <Button
+              data-testid="conv-voice-toggle"
+              variant={listening ? "default" : "outline"}
+              onClick={toggleVoice}
+              className={`flex-1 h-11 ${
+                listening
+                  ? "bg-red-500 hover:bg-red-600 text-white border-0"
+                  : ""
+              }`}
+            >
+              {listening ? (
+                <>
+                  <MicOff className="w-4 h-4 mr-2" /> Detener voz
+                </>
+              ) : (
+                <>
+                  <Mic className="w-4 h-4 mr-2" /> Hablar (voz a texto)
+                </>
+              )}
+            </Button>
+          </div>
           <Button
             data-testid="conv-speaker-send"
             onClick={handleSpeak}

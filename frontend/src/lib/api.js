@@ -75,3 +75,23 @@ export async function trackEvent(type, data = {}) {
     await api.post("/analytics/event", { type, data });
   } catch {}
 }
+
+export async function getSignOfTheDay() {
+  const { data } = await api.get("/dictionary/sign-of-the-day");
+  return data;
+}
+
+export async function submitCommunitySign(payload) {
+  const { data } = await api.post("/dictionary/submit", payload);
+  return data;
+}
+
+export async function getCommunitySigns(status = "approved") {
+  const { data } = await api.get("/dictionary/community", { params: { status } });
+  return data;
+}
+
+export async function validatePractice(payload) {
+  const { data } = await api.post("/practice/validate", payload);
+  return data;
+}

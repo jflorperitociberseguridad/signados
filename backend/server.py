@@ -696,9 +696,99 @@ async def list_languages():
     return {"languages": langs}
 
 
-# ---------------------------------------------------------------------------
-# Mount
-# ---------------------------------------------------------------------------
+@api_router.get("/dictionary/sign-of-the-day", response_model=DictionaryEntry)
+async def sign_of_the_day():
+    """Deterministic sign for today (UTC) so all users see the same one."""
+    today = datetime.now(timezone.utc).date()
+    seed = today.toordinal()
+    idx = seed % len(SEED_DICTIONARY)
+    return SEED_DICTIONARY[idx]
+
+
+class CommunitySubmission(BaseModel):
+    word: str = Field(min_length=1, max_length=80)
+    language: str = Field(min_length=2, max_length=8)
+    description: str = Field(min_length=4, max_length=400)
+    hands: str = Field(min_length=4, max_length=600)
+    mouth: str = Field(min_length=0, max_length=400)
+    expression: str = Field(min_length=0, max_length=400)
+    submitted_by: Optional[str] = Field(default=None, max_length=80)
+
+
+@api_router.post("/dictionary/submit")
+@limiter.limit("10/minute")
+async def submit_sign(request: Request, payload: CommunitySubmission):
+    doc = payload.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["status"] = "pending"
+    doc["created_at"] = datetime.now(timezone.utc).isoformat()
+    await db.community_dictionary.insert_one(doc)
+    asyncio.create_task(record_event("dictionary_submit", {"language": payload.language}))
+    doc.pop("_id", None)
+    return {"ok": True, "id": doc["id"]}
+
+
+@api_router.get("/dictionary/community", response_model=List[dict])
+async def list_community(status: str = "approved", limit: int = 100):
+    limit = max(1, min(500, int(limit)))
+    docs = (
+        await db.community_dictionary.find(
+            {"status": status}, {"_id": 0}
+        )
+        .sort("created_at", -1)
+        .to_list(limit)
+    )
+    return docs
+
+
+# ---- Practice mode ----
+class PracticeRequest(BaseModel):
+    frames: List[str] = Field(min_length=2, max_length=12)
+    expected_word: str = Field(min_length=1, max_length=80)
+    language: Optional[str] = "auto"
+
+
+@api_router.post("/practice/validate")
+@limiter.limit(RATE_TRANSLATE)
+async def practice_validate(request: Request, payload: PracticeRequest):
+    """Score how well the user's attempt matches the expected sign."""
+    chat = _llm_chat(SIGN_SYSTEM_PROMPT, model=LLM_VISION_MODEL)
+    prompt = (
+        f'Eres un evaluador de lengua de signos. El usuario intenta hacer el signo "{payload.expected_word}" '
+        f"en {payload.language or 'la lengua de signos detectada'}. "
+        "Evalúa estos fotogramas (manos, labios, expresión, postura). "
+        "Responde EXCLUSIVAMENTE JSON válido:\n"
+        '{"score": 0-100, "verdict": "perfecto|bueno|aceptable|incorrecto", '
+        '"feedback": "1-2 frases concretas en español sobre cómo mejorar (manos, expresión, etc.)", '
+        '"strengths": ["..."], "weaknesses": ["..."]}'
+    )
+    try:
+        raw = await chat.send_message(
+            UserMessage(text=prompt, file_contents=[ImageContent(image_base64=f) for f in payload.frames])
+        )
+    except Exception as exc:
+        logger.exception("practice validate failed")
+        raise HTTPException(status_code=502, detail=f"AI error: {exc}")
+
+    parsed = _parse_json(raw)
+    score = int(parsed.get("score", 0) or 0)
+    score = max(0, min(100, score))
+    asyncio.create_task(
+        record_event(
+            "practice_attempt",
+            {"word": payload.expected_word, "language": payload.language, "score": score},
+        )
+    )
+    return {
+        "score": score,
+        "verdict": parsed.get("verdict") or "aceptable",
+        "feedback": parsed.get("feedback", ""),
+        "strengths": parsed.get("strengths", []),
+        "weaknesses": parsed.get("weaknesses", []),
+    }
+
+
+# ---- Mount ----
 app.include_router(api_router)
 
 if ALLOWED_HOSTS and ALLOWED_HOSTS != ["*"]:

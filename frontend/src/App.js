@@ -12,6 +12,9 @@ import Conversation from "@/pages/Conversation";
 import Fingerspelling from "@/pages/Fingerspelling";
 import SharePage from "@/pages/SharePage";
 import Analytics from "@/pages/Analytics";
+import Practice from "@/pages/Practice";
+import Quiz from "@/pages/Quiz";
+import CommunitySign from "@/pages/CommunitySign";
 import { trackEvent } from "@/lib/api";
 
 function PageTracker() {
@@ -43,6 +46,9 @@ export default function App() {
             <Route path="/diccionario" element={<Dictionary />} />
             <Route path="/historial" element={<HistoryPage />} />
             <Route path="/conversacion" element={<Conversation />} />
+            <Route path="/practica" element={<Practice />} />
+            <Route path="/quiz" element={<Quiz />} />
+            <Route path="/comunidad" element={<CommunitySign />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/t/:id" element={<SharePage />} />
           </Route>

@@ -11,16 +11,26 @@ import {
   BarChart3,
   Menu,
   X,
+  Target,
+  Brain,
+  Users,
+  Trophy,
+  Flame,
 } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
+import AccessibilityMenu from "./AccessibilityMenu";
+import { useProgress } from "../hooks/useProgress";
 
 const NAV = [
   { to: "/", icon: Hand, label: "Inicio", testId: "nav-home" },
   { to: "/traducir-en-vivo", icon: Video, label: "En vivo", testId: "nav-live" },
   { to: "/texto-a-signos", icon: Type, label: "Texto", testId: "nav-text-to-sign" },
+  { to: "/practica", icon: Target, label: "Práctica", testId: "nav-practice" },
+  { to: "/quiz", icon: Brain, label: "Quiz", testId: "nav-quiz" },
   { to: "/alfabeto", icon: SpellCheck, label: "Alfabeto", testId: "nav-fingerspelling" },
   { to: "/conversacion", icon: MessageSquare, label: "Conversa", testId: "nav-conversation" },
   { to: "/diccionario", icon: BookOpen, label: "Dicc.", testId: "nav-dictionary" },
+  { to: "/comunidad", icon: Users, label: "Comunidad", testId: "nav-community" },
   { to: "/historial", icon: History, label: "Historial", testId: "nav-history" },
   { to: "/analytics", icon: BarChart3, label: "Analítica", testId: "nav-analytics" },
 ];
@@ -29,7 +39,7 @@ const NAV = [
 const BOTTOM_TABS = [
   { to: "/", icon: Hand, label: "Inicio", testId: "tab-home" },
   { to: "/traducir-en-vivo", icon: Video, label: "En vivo", testId: "tab-live" },
-  { to: "/texto-a-signos", icon: Type, label: "Texto", testId: "tab-text" },
+  { to: "/practica", icon: Target, label: "Práctica", testId: "tab-practice" },
   { to: "/diccionario", icon: BookOpen, label: "Dicc.", testId: "tab-dict" },
   { to: "/historial", icon: History, label: "Historial", testId: "tab-history" },
 ];
@@ -55,6 +65,7 @@ const TopNavItem = ({ to, icon: Icon, label, testId, onClick }) => (
 
 export default function Layout() {
   const [open, setOpen] = useState(false);
+  const { state } = useProgress();
 
   return (
     <div className="min-h-screen bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col transition-colors duration-200">

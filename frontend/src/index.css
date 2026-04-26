@@ -1,5 +1,6 @@
 @import url('https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -26,6 +27,43 @@ html.dark body {
 /* Prevent iOS zoom on form input focus */
 @media (max-width: 640px) {
     input, textarea, select { font-size: 16px !important; }
+}
+
+/* ---------- Accessibility ---------- */
+:root { --a11y-scale: 1; }
+
+html { font-size: calc(16px * var(--a11y-scale)); }
+
+html.a11y-contrast {
+    filter: contrast(1.15) saturate(1.15);
+}
+html.a11y-contrast body {
+    color: #000;
+}
+html.a11y-contrast.dark body {
+    color: #fff;
+}
+html.a11y-contrast .text-slate-500,
+html.a11y-contrast .text-slate-600 {
+    color: #1e293b !important;
+}
+html.dark.a11y-contrast .text-slate-500,
+html.dark.a11y-contrast .text-slate-600,
+html.dark.a11y-contrast .text-slate-400 {
+    color: #e2e8f0 !important;
+}
+
+html.a11y-dyslexia,
+html.a11y-dyslexia body,
+html.a11y-dyslexia button,
+html.a11y-dyslexia input,
+html.a11y-dyslexia textarea,
+html.a11y-dyslexia select,
+html.a11y-dyslexia .font-display {
+    font-family: "Atkinson Hyperlegible", "Comic Sans MS", "OpenDyslexic", system-ui, sans-serif !important;
+    letter-spacing: 0.01em;
+    word-spacing: 0.06em;
+    line-height: 1.55;
 }
 
 .font-display {

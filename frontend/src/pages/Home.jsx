@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -13,7 +14,12 @@ import {
   Hand,
   Smile,
   Eye,
+  Target,
+  Brain,
+  Users,
+  Calendar,
 } from "lucide-react";
+import { getSignOfTheDay } from "../lib/api";
 
 const FeatureCard = ({ to, icon: Icon, title, description, testId }) => (
   <Link to={to} data-testid={testId} className="group">
@@ -35,8 +41,47 @@ const FeatureCard = ({ to, icon: Icon, title, description, testId }) => (
 );
 
 export default function Home() {
+  const [sotd, setSotd] = useState(null);
+  useEffect(() => {
+    getSignOfTheDay().then(setSotd).catch(() => {});
+  }, []);
   return (
     <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-8 sm:py-10">
+      {/* Sign of the day banner */}
+      {sotd && (
+        <Card
+          data-testid="sign-of-the-day"
+          className="mb-8 p-5 sm:p-6 border-0 bg-gradient-to-r from-[#002FA7] to-[#3b5bdb] text-white rounded-2xl flex flex-col sm:flex-row items-start sm:items-center gap-4 fade-in-up"
+        >
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-full bg-white/15 backdrop-blur-md flex items-center justify-center">
+              <Calendar className="w-5 h-5" />
+            </span>
+            <div>
+              <div className="text-xs uppercase tracking-wide opacity-80">
+                Signo del día
+              </div>
+              <div className="font-display text-2xl font-semibold">
+                {sotd.word}{" "}
+                <Badge className="bg-white/15 text-white border-0 ml-1 text-xs">
+                  {sotd.language}
+                </Badge>
+              </div>
+            </div>
+          </div>
+          <p className="text-sm sm:text-base opacity-90 flex-1">
+            {sotd.description}
+          </p>
+          <Link
+            to={`/practica?word=${encodeURIComponent(sotd.word)}`}
+            data-testid="sotd-practice-link"
+          >
+            <Button className="bg-white text-[#002FA7] hover:bg-slate-100 rounded-full">
+              Practícalo <ArrowRight className="w-4 h-4 ml-1.5" />
+            </Button>
+          </Link>
+        </Card>
+      )}
       {/* Hero */}
       <section className="grid lg:grid-cols-12 gap-8 lg:gap-10 items-center mb-12 sm:mb-16">
         <div className="lg:col-span-7 order-2 lg:order-1">
