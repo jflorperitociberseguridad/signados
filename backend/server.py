@@ -710,8 +710,8 @@ class CommunitySubmission(BaseModel):
     language: str = Field(min_length=2, max_length=8)
     description: str = Field(min_length=4, max_length=400)
     hands: str = Field(min_length=4, max_length=600)
-    mouth: str = Field(min_length=0, max_length=400)
-    expression: str = Field(min_length=0, max_length=400)
+    mouth: Optional[str] = Field(default="", max_length=400)
+    expression: Optional[str] = Field(default="", max_length=400)
     submitted_by: Optional[str] = Field(default=None, max_length=80)
 
 
@@ -771,7 +771,10 @@ async def practice_validate(request: Request, payload: PracticeRequest):
         raise HTTPException(status_code=502, detail=f"AI error: {exc}")
 
     parsed = _parse_json(raw)
-    score = int(parsed.get("score", 0) or 0)
+    try:
+        score = int(float(parsed.get("score", 0) or 0))
+    except (TypeError, ValueError):
+        score = 0
     score = max(0, min(100, score))
     asyncio.create_task(
         record_event(
