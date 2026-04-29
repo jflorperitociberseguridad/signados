@@ -393,7 +393,7 @@ export default function AvatarSign() {
           </h1>
           <p className="text-slate-600 dark:text-slate-300 mt-1">
             {mode === MODE_REALISTIC
-              ? "Avatar humanoide realista basado en un modelo Mixamo de cuerpo entero. Hombros, brazos, manos y dedos completamente articulados."
+              ? "Avatar humano realista de cuerpo entero (Michelle) con piel, ropa y cara. Hombros, brazos, manos y dedos completamente articulados."
               : "Avatar humanoide estilizado con 17 poses. Más liviano, ideal para móviles."}
           </p>
         </div>
@@ -585,8 +585,8 @@ export default function AvatarSign() {
 
           <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 space-y-1">
             <p>
-              <strong>Modo Realista:</strong> modelo humanoide GLB con
-              skeleton Mixamo (cuerpo entero, hombros, brazos, manos y dedos).
+              <strong>Modo Realista:</strong> avatar humano femenino con piel,
+              ropa y cara realista (cuerpo entero, hombros, brazos, manos y dedos).
             </p>
             <p>
               <strong>Modo Estilizado:</strong> {POSE_KEYS.length} poses

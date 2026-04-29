@@ -109,6 +109,11 @@
 - `/texto-a-signos` now defaults to the global variant; changing it elsewhere syncs back.
 - Variant manager card at top of `/ensenanzas` so admins can change the active variant for the whole app from one place.
 
+### Phase 2 — Block F (Feb 2026) — Real human avatar
+- **Switched GLB asset** from Mixamo `Xbot.glb` (robot/mannequin) → **`Michelle.glb`** (real human female with skin, clothes, hair, glasses, headphones, headphones — 3.2 MB)
+- Same Mixamo skeleton naming → **all 17 poses + bone-mapping work without code changes**
+- Visual upgrade: from grey faceless robot → fully-textured young woman, fitting "figura de avatar humana" request
+
 ## Backlog (P1)
 - TURN server config (currently STUN-only — production guidance in DEPLOY.md)
 - Multi-replica WebRTC signaling (Redis Pub/Sub)
