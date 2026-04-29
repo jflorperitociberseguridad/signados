@@ -37,13 +37,17 @@ import {
   PencilLine,
   Search,
   Lock,
+  ReplaceAll,
+  Globe2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAdminAuth } from "../lib/AdminAuthContext";
+import { useLanguageVariant, VARIANTS } from "../lib/LanguageVariantContext";
 import {
   teachingUpload,
   teachingListFiles,
   teachingDelete,
+  teachingReplace,
   teachingProcess,
   teachingKnowledge,
   teachingDeleteKnowledge,
@@ -104,7 +108,16 @@ export default function Ensenanzas() {
   const [kb, setKb] = useState([]);
   const [kbQ, setKbQ] = useState("");
   const [kbLang, setKbLang] = useState("all");
+  const [kbConfidence, setKbConfidence] = useState("all");
   const [kbLoading, setKbLoading] = useState(false);
+  const [showDoubtfulOnly, setShowDoubtfulOnly] = useState(false);
+
+  // File replace
+  const replaceInputRef = useRef(null);
+  const replacingRef = useRef(null); // file_id being replaced
+
+  // Global variant
+  const { variant, setVariant } = useLanguageVariant();
 
   // Corrections
   const [corrections, setCorrections] = useState([]);
@@ -128,7 +141,7 @@ export default function Ensenanzas() {
     try {
       const [f, k, c, s] = await Promise.all([
         teachingListFiles(password).catch(() => []),
-        teachingKnowledge(password, { q: kbQ, language: kbLang, limit: 200 }).catch(() => []),
+        teachingKnowledge(password, { q: kbQ, language: kbLang, confidence: kbConfidence, limit: 200 }).catch(() => []),
         teachingListCorrections(password).catch(() => []),
         teachingStats(password).catch(() => null),
       ]);
@@ -160,7 +173,12 @@ export default function Ensenanzas() {
   const refreshKb = async () => {
     setKbLoading(true);
     try {
-      const k = await teachingKnowledge(password, { q: kbQ, language: kbLang, limit: 200 });
+      const k = await teachingKnowledge(password, {
+        q: kbQ,
+        language: kbLang,
+        confidence: showDoubtfulOnly ? "baja" : kbConfidence,
+        limit: 200,
+      });
       setKb(k);
     } finally {
       setKbLoading(false);
@@ -261,6 +279,33 @@ export default function Ensenanzas() {
     }
   };
 
+  const startReplace = (id) => {
+    replacingRef.current = id;
+    if (replaceInputRef.current) {
+      replaceInputRef.current.value = "";
+      replaceInputRef.current.click();
+    }
+  };
+
+  const handleReplaceFile = async (file) => {
+    const id = replacingRef.current;
+    replacingRef.current = null;
+    if (!file || !id) return;
+    try {
+      await teachingReplace(password, id, file, "");
+      toast.success("Archivo reemplazado", { description: "Re-procesando con IA…" });
+      // Auto-process the replacement so KB reflects the new content
+      await teachingProcess(password, id);
+      refreshAll();
+    } catch (e) {
+      toast.error("No se pudo reemplazar", {
+        description: e?.response?.data?.detail || e?.message,
+      });
+    } finally {
+      if (replaceInputRef.current) replaceInputRef.current.value = "";
+    }
+  };
+
   const removeKb = async (id) => {
     if (!window.confirm("¿Borrar esta entrada de la base de conocimiento?")) return;
     await teachingDeleteKnowledge(password, id);
@@ -323,6 +368,42 @@ export default function Ensenanzas() {
         </Button>
       </div>
 
+      {/* Global variant manager */}
+      <Card data-testid="variant-manager" className="p-4 mb-4 border border-slate-200 dark:border-slate-700 rounded-xl bg-gradient-to-r from-blue-50 to-emerald-50 dark:from-slate-900 dark:to-slate-900">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <span className="w-10 h-10 rounded-md bg-[#002FA7] text-white flex items-center justify-center shrink-0">
+            <Globe2 className="w-5 h-5" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="font-display font-semibold">Variante de lengua de signos activa</div>
+            <p className="text-xs text-slate-600 dark:text-slate-300">
+              La aplicación priorizará esta variante en todas las traducciones.
+              <span className="block sm:inline sm:ml-1 text-amber-700 dark:text-amber-300">
+                <AlertTriangle className="inline w-3 h-3 mr-0.5" />
+                El lenguaje de signos puede variar según país, región o comunidad.
+              </span>
+            </p>
+          </div>
+          <Select value={variant} onValueChange={setVariant}>
+            <SelectTrigger data-testid="variant-select" className="sm:w-72 bg-white dark:bg-slate-800">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {VARIANTS.map((v) => (
+                <SelectItem key={v.value} value={v.value}>
+                  {v.flag} {v.label}
+                  {v.priority && (
+                    <span className="ml-1.5 text-[10px] text-emerald-600 font-semibold">
+                      · prioridad
+                    </span>
+                  )}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </Card>
+
       {/* Stats grid */}
       {stats && (
         <div data-testid="teach-stats" className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -334,6 +415,15 @@ export default function Ensenanzas() {
       )}
 
       <Tabs defaultValue="upload" className="w-full">
+        {/* Hidden replace input — triggered via startReplace */}
+        <input
+          ref={replaceInputRef}
+          type="file"
+          accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.webp,.mp4,.webm,.mov"
+          onChange={(e) => handleReplaceFile(e.target.files?.[0])}
+          className="hidden"
+          data-testid="teach-replace-input"
+        />
         <TabsList className="w-full justify-start overflow-x-auto" data-testid="teach-tabs">
           <TabsTrigger value="upload" data-testid="tab-upload">
             <Upload className="w-4 h-4 mr-1.5" /> Subir
@@ -436,6 +526,15 @@ export default function Ensenanzas() {
                       </Badge>
                       <div className="flex gap-1.5">
                         <Button
+                          data-testid={`teach-replace-${f.id}`}
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => startReplace(f.id)}
+                          title="Reemplazar archivo"
+                        >
+                          <ReplaceAll className="w-4 h-4" />
+                        </Button>
+                        <Button
                           data-testid={`teach-reprocess-${f.id}`}
                           size="sm"
                           variant="ghost"
@@ -491,9 +590,42 @@ export default function Ensenanzas() {
                   <SelectItem value="LIBRAS">LIBRAS</SelectItem>
                 </SelectContent>
               </Select>
+              <Select value={kbConfidence} onValueChange={setKbConfidence}>
+                <SelectTrigger data-testid="kb-confidence" className="w-full sm:w-36">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas</SelectItem>
+                  <SelectItem value="alta">Alta</SelectItem>
+                  <SelectItem value="media">Media</SelectItem>
+                  <SelectItem value="baja">Baja (dudosos)</SelectItem>
+                </SelectContent>
+              </Select>
               <Button data-testid="kb-search-btn" onClick={refreshKb} className="btn-ikb">
                 {kbLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Buscar"}
               </Button>
+            </div>
+            <div className="flex items-center justify-between mt-3">
+              <button
+                data-testid="kb-doubtful-toggle"
+                onClick={() => {
+                  const next = !showDoubtfulOnly;
+                  setShowDoubtfulOnly(next);
+                  if (next) setKbConfidence("baja");
+                  setTimeout(refreshKb, 50);
+                }}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  showDoubtfulOnly
+                    ? "bg-amber-500 text-white border-amber-500"
+                    : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-amber-400"
+                }`}
+              >
+                <AlertTriangle className="inline w-3 h-3 mr-1" />
+                {showDoubtfulOnly ? "Mostrando solo dudosos" : "Mostrar solo signos dudosos"}
+              </button>
+              <span className="text-xs text-slate-500">
+                {kb.length} resultado{kb.length === 1 ? "" : "s"}
+              </span>
             </div>
           </Card>
 

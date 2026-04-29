@@ -1439,6 +1439,86 @@ async def teaching_delete(request: Request, file_id: str):
     return {"deleted": 1}
 
 
+@api_router.put("/admin/teaching/files/{file_id}")
+async def teaching_replace(
+    request: Request,
+    file_id: str,
+    file: UploadFile = File(...),
+    label: str = Form(""),
+):
+    """Replace the binary of an existing teaching file (re-upload).
+    KB entries are kept until the file is re-processed."""
+    _verify_admin_either(request)
+    doc = await db.teaching_files.find_one({"id": file_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    file_type = teaching_service.detect_type(file.content_type or "", file.filename or "")
+    if not file_type:
+        raise HTTPException(status_code=400, detail="Tipo de archivo no soportado")
+
+    safe = teaching_service.safe_name(file.filename or f"file-{file_id}")
+    target = teaching_service.teaching_dir() / f"{file_id}__{safe}"
+    bytes_written = 0
+    try:
+        with open(target, "wb") as fh:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > TEACHING_MAX_BYTES:
+                    fh.close()
+                    target.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Archivo demasiado grande (máx {TEACHING_MAX_BYTES // (1024 * 1024)} MB)",
+                    )
+                fh.write(chunk)
+    except HTTPException:
+        raise
+
+    # Remove the previous file from disk if path changed
+    old_path = doc.get("path")
+    if old_path and old_path != str(target):
+        try:
+            Path(old_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    update = {
+        "filename": file.filename or safe,
+        "type": file_type,
+        "size": bytes_written,
+        "path": str(target),
+        "status": "uploaded",
+        "kb_count": doc.get("kb_count", 0),
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "processed_at": None,
+        "error": None,
+    }
+    if label:
+        update["label"] = label
+    await db.teaching_files.update_one({"id": file_id}, {"$set": update})
+    return {**doc, **update, "id": file_id}
+
+
+@api_router.patch("/admin/teaching/files/{file_id}")
+async def teaching_update_metadata(request: Request, file_id: str, payload: dict):
+    """Update metadata only (label) — does not touch the file binary."""
+    _verify_admin_either(request)
+    label = (payload or {}).get("label")
+    if label is None:
+        raise HTTPException(status_code=400, detail="Falta 'label'")
+    res = await db.teaching_files.update_one(
+        {"id": file_id}, {"$set": {"label": str(label)[:200]}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    doc = await db.teaching_files.find_one({"id": file_id}, {"_id": 0})
+    return doc
+
+
 @api_router.post("/admin/teaching/process/{file_id}")
 @limiter.limit("10/minute")
 async def teaching_process(request: Request, file_id: str):
@@ -1510,6 +1590,7 @@ async def teaching_knowledge(
     request: Request,
     q: Optional[str] = None,
     language: Optional[str] = None,
+    confidence: Optional[str] = None,
     limit: int = 200,
 ):
     _verify_admin_either(request)
@@ -1523,6 +1604,8 @@ async def teaching_knowledge(
         ]
     if language and language not in ("auto", "all"):
         query["language"] = {"$regex": f"^{language}", "$options": "i"}
+    if confidence and confidence not in ("all",):
+        query["confidence"] = confidence.lower()
     docs = await db.knowledge_base.find(query, {"_id": 0}).limit(limit).to_list(limit)
     return docs
 

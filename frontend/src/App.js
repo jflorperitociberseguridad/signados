@@ -22,6 +22,7 @@ import VideoCall from "@/pages/VideoCall";
 import Ensenanzas from "@/pages/Ensenanzas";
 import OfflineIndicator from "@/components/OfflineIndicator";
 import { AdminAuthProvider } from "@/lib/AdminAuthContext";
+import { LanguageVariantProvider } from "@/lib/LanguageVariantContext";
 import { trackEvent } from "@/lib/api";
 
 function PageTracker() {
@@ -43,7 +44,8 @@ export default function App() {
   return (
     <div className="App">
       <AdminAuthProvider>
-        <BrowserRouter>
+        <LanguageVariantProvider>
+          <BrowserRouter>
           <PageTracker />
           <Routes>
             <Route element={<Layout />}>
@@ -68,7 +70,8 @@ export default function App() {
               <Route path="/t/:id" element={<SharePage />} />
             </Route>
           </Routes>
-        </BrowserRouter>
+          </BrowserRouter>
+        </LanguageVariantProvider>
       </AdminAuthProvider>
       <OfflineIndicator />
       <Toaster richColors position="top-right" />

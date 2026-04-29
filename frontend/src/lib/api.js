@@ -186,14 +186,27 @@ export async function teachingDelete(pwd, id) {
   const { data } = await api.delete(`/admin/teaching/files/${id}`, adminH(pwd));
   return data;
 }
+export async function teachingReplace(pwd, id, file, label = "") {
+  const fd = new FormData();
+  fd.append("file", file);
+  if (label) fd.append("label", label);
+  const { data } = await api.put(`/admin/teaching/files/${id}`, fd, {
+    headers: { "X-Admin-Password": pwd, "Content-Type": "multipart/form-data" },
+  });
+  return data;
+}
+export async function teachingRenameFile(pwd, id, label) {
+  const { data } = await api.patch(`/admin/teaching/files/${id}`, { label }, adminH(pwd));
+  return data;
+}
 export async function teachingProcess(pwd, id) {
   const { data } = await api.post(`/admin/teaching/process/${id}`, {}, adminH(pwd));
   return data;
 }
-export async function teachingKnowledge(pwd, { q = "", language = "all", limit = 200 } = {}) {
+export async function teachingKnowledge(pwd, { q = "", language = "all", confidence = "all", limit = 200 } = {}) {
   const { data } = await api.get("/admin/teaching/knowledge", {
     ...adminH(pwd),
-    params: { q, language, limit },
+    params: { q, language, confidence, limit },
   });
   return data;
 }

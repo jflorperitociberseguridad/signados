@@ -12,11 +12,14 @@ import {
   RotateCcw,
   Sparkles,
   Gauge,
+  UserCircle2,
+  Wand2,
 } from "lucide-react";
 import { textToSign } from "../lib/api";
 import { toast } from "sonner";
 import { buildAvatar } from "../lib/avatarRig";
-import { PoseAnimator, POSE_KEYS, poseForWord } from "../lib/avatarPoses";
+import { PoseAnimator, POSE_KEYS } from "../lib/avatarPoses";
+import { RealisticAvatar } from "../lib/avatarRealistic";
 
 const SHORTCUTS = [
   "Hola", "Adiós", "Sí", "No", "Por favor", "Gracias",
@@ -24,15 +27,20 @@ const SHORTCUTS = [
   "Bien", "Mal", "Ayuda",
 ];
 
+const MODE_REALISTIC = "realistic";
+const MODE_STYLIZED = "stylized";
+
 export default function AvatarSign() {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const rendererRef = useRef(null);
-  const animatorRef = useRef(null);
   const camRef = useRef(null);
   const animFrameRef = useRef(null);
 
-  // Mouse orbit state
+  const stylizedAnimRef = useRef(null);
+  const realisticRef = useRef(null);
+  const stylizedRootRef = useRef(null);
+
   const orbitRef = useRef({
     azim: 0,
     polar: 1.45,
@@ -41,6 +49,10 @@ export default function AvatarSign() {
     lastX: 0,
     lastY: 0,
   });
+
+  const [mode, setMode] = useState(MODE_REALISTIC);
+  const [loadingModel, setLoadingModel] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -74,13 +86,11 @@ export default function AvatarSign() {
     bgTex.colorSpace = THREE.SRGBColorSpace;
     scene.background = bgTex;
 
-    // Camera
     const cam = new THREE.PerspectiveCamera(34, w / h, 0.1, 100);
     cam.position.set(0, 1.65, 3.4);
     cam.lookAt(0, 1.55, 0);
     camRef.current = cam;
 
-    // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -92,7 +102,6 @@ export default function AvatarSign() {
     mount.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // ----- Lighting (3-point studio) -----
     scene.add(new THREE.AmbientLight(0xffffff, 0.35));
 
     const key = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -118,47 +127,29 @@ export default function AvatarSign() {
     rim.target.position.set(0, 1.5, 0);
     scene.add(rim, rim.target);
 
-    // Hemisphere bounce
     const hemi = new THREE.HemisphereLight(0xeaf2ff, 0x453525, 0.35);
     scene.add(hemi);
 
-    // ----- Floor (catches the soft shadow) -----
-    const floorMat = new THREE.MeshStandardMaterial({
-      color: 0x9aa6b8,
-      roughness: 0.9,
-      metalness: 0.0,
-    });
-    const floor = new THREE.Mesh(new THREE.CircleGeometry(3.4, 64), floorMat);
+    // Floor
+    const floor = new THREE.Mesh(
+      new THREE.CircleGeometry(3.4, 64),
+      new THREE.MeshStandardMaterial({
+        color: 0x9aa6b8,
+        roughness: 0.9,
+        metalness: 0.0,
+      }),
+    );
     floor.rotation.x = -Math.PI / 2;
-    floor.position.y = 0;
     floor.receiveShadow = true;
     scene.add(floor);
 
-    // Soft fake-AO ring under feet
-    const aoMat = new THREE.MeshBasicMaterial({
-      color: 0x000000,
-      transparent: true,
-      opacity: 0.25,
-    });
-    const aoGeom = new THREE.RingGeometry(0.05, 1.2, 64);
-    const ao = new THREE.Mesh(aoGeom, aoMat);
+    const ao = new THREE.Mesh(
+      new THREE.RingGeometry(0.05, 1.2, 64),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }),
+    );
     ao.rotation.x = -Math.PI / 2;
     ao.position.y = 0.001;
     scene.add(ao);
-
-    // ----- Avatar -----
-    const { root, bones } = buildAvatar();
-    root.position.y = 0;
-    root.traverse((o) => {
-      if (o.isMesh) {
-        o.castShadow = true;
-      }
-    });
-    scene.add(root);
-
-    const animator = new PoseAnimator(bones);
-    animatorRef.current = animator;
-    animator.onWord = (word) => setCurrentWord(word || "");
 
     // ----- Mouse orbit -----
     const dom = renderer.domElement;
@@ -180,24 +171,17 @@ export default function AvatarSign() {
       orbitRef.current.lastX = e.clientX;
       orbitRef.current.lastY = e.clientY;
       orbitRef.current.azim -= dx * 0.008;
-      orbitRef.current.polar = Math.max(
-        0.6,
-        Math.min(2.2, orbitRef.current.polar - dy * 0.006),
-      );
+      orbitRef.current.polar = Math.max(0.6, Math.min(2.2, orbitRef.current.polar - dy * 0.006));
     };
     const onWheel = (e) => {
       e.preventDefault();
-      orbitRef.current.dist = Math.max(
-        2.4,
-        Math.min(7, orbitRef.current.dist + e.deltaY * 0.003),
-      );
+      orbitRef.current.dist = Math.max(2.4, Math.min(7, orbitRef.current.dist + e.deltaY * 0.003));
     };
     dom.addEventListener("mousedown", onDown);
     window.addEventListener("mouseup", onUp);
     window.addEventListener("mousemove", onMove);
     dom.addEventListener("wheel", onWheel, { passive: false });
 
-    // Touch (basic single-finger orbit + pinch zoom)
     let touchPinch = null;
     const onTStart = (e) => {
       if (e.touches.length === 1) {
@@ -221,19 +205,12 @@ export default function AvatarSign() {
         orbitRef.current.lastX = t.clientX;
         orbitRef.current.lastY = t.clientY;
         orbitRef.current.azim -= dx * 0.008;
-        orbitRef.current.polar = Math.max(
-          0.6,
-          Math.min(2.2, orbitRef.current.polar - dy * 0.006),
-        );
+        orbitRef.current.polar = Math.max(0.6, Math.min(2.2, orbitRef.current.polar - dy * 0.006));
       } else if (e.touches.length === 2 && touchPinch) {
         const a = e.touches[0];
         const b = e.touches[1];
         const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
-        const ratio = touchPinch.dist / d;
-        orbitRef.current.dist = Math.max(
-          2.4,
-          Math.min(7, touchPinch.startDist * ratio),
-        );
+        orbitRef.current.dist = Math.max(2.4, Math.min(7, touchPinch.startDist * (touchPinch.dist / d)));
       }
     };
     const onTEnd = () => {
@@ -248,9 +225,9 @@ export default function AvatarSign() {
     const clock = new THREE.Clock();
     const tick = () => {
       const dt = Math.min(0.05, clock.getDelta());
-      animator.step(dt);
+      stylizedAnimRef.current?.step(dt);
+      realisticRef.current?.step(dt);
 
-      // Orbit camera (spherical)
       const o = orbitRef.current;
       const cx = Math.sin(o.azim) * Math.sin(o.polar) * o.dist;
       const cy = Math.cos(o.polar) * o.dist + 1.4;
@@ -263,7 +240,6 @@ export default function AvatarSign() {
     };
     tick();
 
-    // Resize
     const onResize = () => {
       const w2 = mount.clientWidth;
       const h2 = mount.clientHeight;
@@ -293,20 +269,83 @@ export default function AvatarSign() {
     };
   }, []);
 
-  // Update animator speed when slider moves
+  // ----- Swap avatar mode (Realistic <-> Stylized) -----
   useEffect(() => {
-    if (animatorRef.current) animatorRef.current.setSpeed(speed);
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    let cancelled = false;
+    const swap = async () => {
+      // Tear down whichever is active
+      if (realisticRef.current) {
+        realisticRef.current.dispose();
+        realisticRef.current = null;
+      }
+      if (stylizedRootRef.current) {
+        scene.remove(stylizedRootRef.current);
+        stylizedRootRef.current = null;
+      }
+      stylizedAnimRef.current = null;
+
+      setLoadError("");
+      setCurrentWord("");
+
+      if (mode === MODE_REALISTIC) {
+        setLoadingModel(true);
+        try {
+          const r = new RealisticAvatar(scene, {
+            onWord: (w) => setCurrentWord(w || ""),
+          });
+          await r.load();
+          if (cancelled) {
+            r.dispose();
+            return;
+          }
+          realisticRef.current = r;
+        } catch (e) {
+          setLoadError("No se pudo cargar el modelo realista. Volviendo al estilizado.");
+          // Fallback to stylized so user is never stuck
+          setMode(MODE_STYLIZED);
+        } finally {
+          setLoadingModel(false);
+        }
+      } else {
+        // Build the procedural avatar
+        const { root, bones } = buildAvatar();
+        root.traverse((o) => {
+          if (o.isMesh) o.castShadow = true;
+        });
+        scene.add(root);
+        stylizedRootRef.current = root;
+        const animator = new PoseAnimator(bones);
+        animator.onWord = (w) => setCurrentWord(w || "");
+        stylizedAnimRef.current = animator;
+        setLoadingModel(false);
+      }
+    };
+    swap();
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
+
+  // Sync animator speed
+  useEffect(() => {
+    stylizedAnimRef.current?.setSpeed(speed);
+    realisticRef.current?.setSpeed(speed);
   }, [speed]);
 
   // ---- Actions ----
   const playWords = (words) => {
-    const animator = animatorRef.current;
-    if (!animator) return;
-    const seq = words.map((w) => ({ word: typeof w === "string" ? w : w.word }));
-    animator.setQueue(seq);
+    const target = realisticRef.current || stylizedAnimRef.current;
+    if (!target) return;
+    if (target instanceof RealisticAvatar) {
+      target.setQueue(words);
+    } else {
+      target.setQueue(words.map((w) => ({ word: w })));
+    }
     setPlaying(true);
-    // Clear "playing" state shortly after the last pose finishes
-    const totalMs = seq.length * 1300 + 900;
+    const totalMs = words.length * 1300 + 900;
     setTimeout(() => setPlaying(false), totalMs / Math.max(0.4, speed));
   };
 
@@ -317,22 +356,9 @@ export default function AvatarSign() {
       const res = await textToSign(text.trim(), "auto");
       setResult(res);
       const words = (res.steps || []).map((s) => s.word).filter(Boolean);
-      if (words.length === 0) {
-        // Fall back to splitting the user input
-        playWords(
-          text
-            .trim()
-            .split(/\s+/)
-            .filter(Boolean)
-            .slice(0, 12),
-        );
-      } else {
-        playWords(words.slice(0, 12));
-      }
+      playWords(words.length ? words.slice(0, 12) : text.trim().split(/\s+/).slice(0, 12));
     } catch (e) {
-      toast.error("Error", {
-        description: e?.response?.data?.detail || e?.message,
-      });
+      toast.error("Error", { description: e?.response?.data?.detail || e?.message });
     } finally {
       setBusy(false);
     }
@@ -344,7 +370,8 @@ export default function AvatarSign() {
   };
 
   const stop = () => {
-    animatorRef.current?.clear();
+    realisticRef.current?.clear();
+    stylizedAnimRef.current?.clear();
     setPlaying(false);
   };
 
@@ -365,14 +392,47 @@ export default function AvatarSign() {
             Avatar 3D
           </h1>
           <p className="text-slate-600 dark:text-slate-300 mt-1">
-            Avatar humanoide articulado con 14 poses, expresiones faciales,
-            parpadeo y respiración. Arrastra para rotar la cámara, rueda para
-            zoom.
+            {mode === MODE_REALISTIC
+              ? "Avatar humanoide realista basado en un modelo Mixamo de cuerpo entero. Hombros, brazos, manos y dedos completamente articulados."
+              : "Avatar humanoide estilizado con 17 poses. Más liviano, ideal para móviles."}
           </p>
         </div>
         <Badge className="bg-emerald-100 text-emerald-700 border-0 hidden sm:inline-flex">
           <Sparkles className="w-3.5 h-3.5 mr-1" /> Mejorado
         </Badge>
+      </div>
+
+      {/* Mode selector */}
+      <div className="mb-4 flex flex-wrap items-center gap-2" data-testid="avatar-mode-selector">
+        <span className="text-xs uppercase tracking-wide text-slate-500">Modelo:</span>
+        <button
+          data-testid="avatar-mode-realistic"
+          onClick={() => setMode(MODE_REALISTIC)}
+          className={`px-4 py-1.5 rounded-full text-sm border transition-colors flex items-center gap-1.5 ${
+            mode === MODE_REALISTIC
+              ? "bg-[#002FA7] text-white border-[#002FA7]"
+              : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-[#002FA7]"
+          }`}
+        >
+          <UserCircle2 className="w-4 h-4" /> Realista
+          <span className="text-[10px] opacity-75 ml-0.5">GLB</span>
+        </button>
+        <button
+          data-testid="avatar-mode-stylized"
+          onClick={() => setMode(MODE_STYLIZED)}
+          className={`px-4 py-1.5 rounded-full text-sm border transition-colors flex items-center gap-1.5 ${
+            mode === MODE_STYLIZED
+              ? "bg-[#002FA7] text-white border-[#002FA7]"
+              : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-[#002FA7]"
+          }`}
+        >
+          <Wand2 className="w-4 h-4" /> Estilizado
+        </button>
+        {loadError && (
+          <span className="text-xs text-red-600" data-testid="avatar-load-error">
+            {loadError}
+          </span>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">
@@ -385,7 +445,21 @@ export default function AvatarSign() {
               style={{ minHeight: 380 }}
             />
 
-            {/* Camera reset + speed badge */}
+            {loadingModel && (
+              <div
+                data-testid="avatar-loading"
+                className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm rounded-2xl"
+              >
+                <div className="text-center text-white">
+                  <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
+                  <div className="text-sm font-medium">
+                    {mode === MODE_REALISTIC ? "Cargando modelo realista…" : "Cargando…"}
+                  </div>
+                  <div className="text-xs text-white/70 mt-1">~2.8 MB</div>
+                </div>
+              </div>
+            )}
+
             <div className="absolute top-3 right-3 flex items-center gap-2">
               <Badge
                 data-testid="avatar-speed-badge"
@@ -403,7 +477,6 @@ export default function AvatarSign() {
               </button>
             </div>
 
-            {/* Word being signed */}
             {currentWord && playing && (
               <div
                 data-testid="avatar-current-word"
@@ -416,7 +489,6 @@ export default function AvatarSign() {
             )}
           </div>
 
-          {/* Quick poses */}
           <div className="mt-4">
             <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
               Probar una seña rápida
@@ -427,7 +499,8 @@ export default function AvatarSign() {
                   key={w}
                   data-testid={`avatar-quick-${w.toLowerCase().replace(/\s+/g, "-")}`}
                   onClick={() => handleQuickPose(w)}
-                  className="px-3 py-1.5 rounded-full text-sm bg-slate-100 hover:bg-[#002FA7] hover:text-white text-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-[#002FA7] dark:hover:text-white border border-slate-200 dark:border-slate-700 transition-all"
+                  disabled={loadingModel}
+                  className="px-3 py-1.5 rounded-full text-sm bg-slate-100 hover:bg-[#002FA7] hover:text-white text-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-[#002FA7] dark:hover:text-white border border-slate-200 dark:border-slate-700 transition-all disabled:opacity-50"
                 >
                   {w}
                 </button>
@@ -452,7 +525,7 @@ export default function AvatarSign() {
             <Button
               data-testid="avatar-play"
               onClick={handleGenerate}
-              disabled={busy || !text.trim()}
+              disabled={busy || !text.trim() || loadingModel}
               className="btn-ikb flex-1 h-11"
             >
               {busy ? (
@@ -471,14 +544,12 @@ export default function AvatarSign() {
                 onClick={stop}
                 variant="outline"
                 className="h-11"
-                title="Detener"
               >
                 <Square className="w-4 h-4" />
               </Button>
             )}
           </div>
 
-          {/* Speed slider */}
           <div className="mt-4">
             <label className="text-xs uppercase tracking-wide text-slate-500 flex items-center justify-between">
               <span>Velocidad</span>
@@ -514,21 +585,15 @@ export default function AvatarSign() {
 
           <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 space-y-1">
             <p>
-              <strong>Anatomía:</strong> cabeza, cuello, torso, hombros 3 ejes,
-              codo, muñeca y 5 dedos articulados (3 falanges) por mano.
+              <strong>Modo Realista:</strong> modelo humanoide GLB con
+              skeleton Mixamo (cuerpo entero, hombros, brazos, manos y dedos).
             </p>
             <p>
-              <strong>Vida:</strong> respiración, parpadeo aleatorio, expresión
-              facial sincronizada.
+              <strong>Modo Estilizado:</strong> {POSE_KEYS.length} poses
+              precalibradas, sin descarga, ideal para móviles.
             </p>
             <p>
-              <strong>Cámara:</strong> arrastrar para rotar · rueda/pellizcar
-              para zoom · doble clic en{" "}
-              <RotateCcw className="inline w-3 h-3" /> para restablecer.
-            </p>
-            <p className="text-amber-700 dark:text-amber-300 mt-2">
-              <strong>Nota:</strong> {POSE_KEYS.length} poses estilizadas. Es
-              una ayuda visual — un signante humano sigue siendo la referencia.
+              <strong>Cámara:</strong> arrastrar · rueda/pellizco · botón ↻ para reset.
             </p>
           </div>
         </Card>

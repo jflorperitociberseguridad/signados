@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
@@ -12,6 +12,7 @@ import {
 } from "../components/ui/select";
 import { textToSign } from "../lib/api";
 import { toast } from "sonner";
+import { useLanguageVariant, VARIANTS } from "../lib/LanguageVariantContext";
 import { Hand, Smile, Eye, User, Loader2, Sparkles, Languages, AlertTriangle, Database } from "lucide-react";
 
 const LANGS = [
@@ -23,10 +24,16 @@ const LANGS = [
 ];
 
 export default function TextToSign() {
+  const { variant } = useLanguageVariant();
   const [text, setText] = useState("");
-  const [lang, setLang] = useState("auto");
+  const [lang, setLang] = useState(variant || "auto");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+
+  // When the global variant changes from elsewhere, reflect it here
+  useEffect(() => {
+    setLang(variant || "auto");
+  }, [variant]);
 
   async function handleSubmit() {
     if (!text.trim()) return;

@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 9 (Phase 2 Block D) end-to-end testing complete. Backend: 19/19 pytest pass — covers 3 NEW endpoints (PUT /api/admin/teaching/files/{id} replace-binary, PATCH /api/admin/teaching/files/{id} label-rename, GET /api/admin/teaching/knowledge?confidence=baja|alta filter) plus regression of /health, /translate/text-to-sign, /rtc/room, /offline/pack, /admin/teaching/{files,corrections}. Frontend: /avatar dual-mode selector + GLB load + quick poses verified, /ensenanzas variant-manager + KB tab confidence/doubtful filters + Subir tab replace/reprocess/delete buttons verified, /texto-a-signos defaults to global variant (LSE) and follows localStorage on change.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter9_block_d.py",
+    "/app/test_reports/pytest/iter9_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "PUT /api/admin/teaching/files/{file_id} keeps the OLD KB rows (kb_count preserved on doc) but resets status to 'uploaded' and clears processed_at. If the user replaces a file but never re-processes, stale KB entries remain attached to the file_id with the new filename — could be misleading. Consider auto-purging knowledge_base where source_file_id == file_id on replace, OR show a 'KB stale' badge in the UI until reprocess. Not blocking.",
+    "PATCH /api/admin/teaching/files/{file_id} accepts arbitrary `dict` payload (FastAPI raw dict). For consistency with the rest of the API which uses Pydantic models, define a TeachingFileMetaUpdate(BaseModel) with label: str = Field(..., max_length=200). Currently any extra keys are silently ignored which is fine, but the type hint is weaker than the rest of the codebase.",
+    "GET /api/admin/teaching/knowledge confidence param uses `.lower()` and matches exactly. If the LLM ever returns 'Baja' or 'BAJA' (capitalized) during mining, the filter would silently exclude it. Recommend normalizing on insert (in mine_with_llm output) so the DB stores a canonical lowercase confidence enum.",
+    "server.py is now ~1715 lines (was ~1630 in iter8). Still recommend splitting teaching/* and billing/* into their own routers for maintainability — comment carried forward from iter8.",
+    "Hidden file input element data-testid='teach-replace-input' is rendered ONCE at the page level (not per row) — confirmed working: a single hidden <input> is shared across all row 'Replace' buttons via a ref. Spec said 'each file row shows ... clicking teach-replace triggers a hidden file input (teach-replace-input)' which matches the actual one-shared-input implementation. Not a bug, just noting the discrepancy with how the spec was worded."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter9_block_d.py"
+  ],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "100% effective — all spec testids found, variant context persists in localStorage, selectors react to localStorage on reload"},
+  "test_credentials": "Admin: signlanguage-admin-2026 (from /app/memory/test_credentials.md, confirmed against /app/backend/.env)",
+  "seed_data_creation": "Test created and cleaned up: 1 teaching file (TEST_iter9_*.docx) — patched/replaced/processed/deleted via fixture teardown. KB entries from prior iterations were used as-is; confidence filter assertions are content-agnostic (assert all returned items match the filtered confidence value).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Block D regression file is /app/backend/tests/test_iter9_block_d.py — covers 3 NEW endpoints + minimal regression. Run with: `pytest backend/tests/test_iter9_block_d.py -v --junitxml=/app/test_reports/pytest/iter9_results.xml`. Frontend testids confirmed real: avatar-mode-selector, avatar-mode-realistic, avatar-mode-stylized, avatar-canvas, avatar-quick-* (16 shortcuts: hola/adios/si/no/por-favor/gracias/te-quiero/yo/tu/comer/beber/casa/pensar/bien/mal/ayuda), avatar-current-word (only visible while playing=true; do NOT assert on it after click without `playing` still being true — it disappears after pose ends), variant-manager, variant-select (Radix Select — value read via .text not .input_value), kb-confidence, kb-doubtful-toggle, tab-upload, tab-kb, tab-corrections, tab-train, teach-replace-{id}, teach-reprocess-{id}, teach-delete-{id}, teach-replace-input (single shared hidden input — display:none, use existence check not visibility), t2s-lang-select. localStorage key for global variant: 'signlang.variant.v1' — defaults to 'LSE' on first load and is read by /texto-a-signos and /ensenanzas. Admin password persists in localStorage 'signlang.admin.password.v1' (confirmed iter8).",
+  "verified_flows": [
+    "Backend PUT /api/admin/teaching/files/{id}: 401 without admin header, 404 unknown id, 200 with new file -> status='uploaded', new size, processed_at=null, error=null, id preserved",
+    "Backend PATCH /api/admin/teaching/files/{id}: 401 without admin, 400 missing label, 404 unknown id, 200 with {label} -> persists across GET /files",
+    "Backend GET /api/admin/teaching/knowledge?confidence=baja: returns only entries with confidence='baja'; ?confidence=alta returns only 'alta'; ?confidence=all behaves like no filter; 401 without admin",
+    "Backend regression: /health (status=ok), /translate/text-to-sign (returns summary+steps), /rtc/room (returns {room, expires_in_minutes}), /offline/pack (returns {count, items, version})",
+    "Frontend /avatar: avatar-mode-selector, avatar-mode-realistic, avatar-mode-stylized, avatar-canvas all present; default mode = realistic (GLB loaded ~3s, body visible); clicking stylized swaps without console errors; clicking back to realistic re-loads GLB",
+    "Frontend /avatar quick poses: avatar-quick-hola and avatar-quick-te-quiero clicks trigger pose execution (button gets active styling)",
+    "Frontend /ensenanzas: admin gate works, variant-manager card visible at top, variant-select shows 'LSE' by default, localStorage('signlang.variant.v1') = 'LSE'",
+    "Frontend /ensenanzas KB tab: kb-confidence dropdown + kb-doubtful-toggle present",
+    "Frontend /ensenanzas Subir tab: 2 file rows each with teach-replace/reprocess/delete buttons + 1 shared hidden teach-replace-input",
+    "Frontend /texto-a-signos: t2s-lang-select defaults to 'LSE — Lengua de Signos Española' (NOT 'auto'); after localStorage set to 'ASL' and reload, selector shows 'ASL — Americana' — global variant context wired correctly",
+    "No console pageerror or .error/.error-* on any tested page"
+  ]
+}
