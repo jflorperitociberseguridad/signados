@@ -1,0 +1,61 @@
+{
+  "summary": "Phase 2 Block C end-to-end testing complete. Backend: 16/16 pytest pass (Block B regression + new admin teaching CRUD + KB lookup + KB-augmented text-to-sign). Frontend: header reorg, Más dropdown, /traductor alias redirect, /ensenanzas auth gate, all 4 admin tabs, and 6 existing pages all working. Two reported 'failures' were test-script artifacts, not real bugs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter8_block_c.py",
+    "/app/test_reports/pytest/iter8_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "/app/backend/server.py is now ~1630 lines and is approaching split-worthy. Consider moving teaching/* and billing/* endpoints into separate routers (server.py, billing.py, admin_teaching.py) for maintainability. Not blocking.",
+    "Admin gate uses a single shared password sent in X-Admin-Password header for every admin call. For production, consider issuing a short-lived signed token after /api/admin/login instead of forwarding the password on every request. Not a regression.",
+    "/api/admin/teaching/process kicks off background work via asyncio.create_task without a job queue. If the process is killed mid-extraction, the file stays in 'processing' forever. Consider a stale-job sweeper or a real worker. Not blocking for MVP.",
+    "Layout.jsx admin link uses testId='nav-teaching' but review_request lists it as 'nav-ensenanzas'. Either is fine; just align spec ↔ code so future test agents don't get mismatched testids.",
+    "_kb_lookup uses regex with f-string interpolation of user input (word_l). If a future endpoint allows arbitrary q from the public, sanitize regex special chars (re.escape) to avoid ReDoS / wrong matches. Currently low risk because callers come from /kb/lookup with short query strings."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter8_block_c.py"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% effective (45/45 real checks; 2 'fails' were script artifacts; 1 'err' was a pytest-style typo on is_visible await — page actually redirected as expected)"},
+  "test_credentials": "Admin: signlanguage-admin-2026 (read from /app/memory/test_credentials.md and confirmed against /app/backend/.env)",
+  "seed_data_creation": "Test created and cleaned up: 1 teaching file (TEST_kb.docx) + 1 correction (TESTHOLA/LSE) + their derived KB rows. All purged via DELETE endpoints in test teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression test file is /app/backend/tests/test_iter8_block_c.py — covers Block B (/health, /email/status, /rtc/room, /offline/pack) AND Block C (admin teaching CRUD, corrections, KB-augmented text-to-sign, public /api/kb/lookup, admin auth gating with 401 on missing/wrong password). Run with: REACT_APP_BACKEND_URL set + `pytest backend/tests/test_iter8_block_c.py -v`. Frontend: admin-link testid is 'nav-teaching' NOT 'nav-ensenanzas'. teach-file-input is a hidden <input type='file'>; check existence not visibility (use page.locator(...).count() > 0 or click via teach-pick-file). The shared admin auth context persists in localStorage key 'signlang.admin.password.v1'.",
+  "rca_of_script_only_artifacts": {
+    "fail_1_teach_file_input": "Hidden file input — Ensenanzas.jsx line 373 has data-testid='teach-file-input' on a display:none input. is_visible() returns False but element exists. Real UX uses teach-pick-file button which is visible. NOT a bug.",
+    "fail_2_nav_ensenanzas": "Admin link testid is 'nav-teaching', not 'nav-ensenanzas'. Admin badge appeared in nav after admin login (confirming isAdmin=true via shared AdminAuthContext + localStorage). Spec naming mismatch only.",
+    "err_1_traductor_redirect": "page.is_visible returns bool not coroutine in this context — script bug. Logged URL confirms /traductor → /texto-a-signos worked correctly."
+  },
+  "verified_flows": [
+    "Backend /api/health returns 200 with llm_key_configured=true",
+    "Backend admin gate: 401 on missing X-Admin-Password (4 endpoints + upload)",
+    "Backend admin gate: 401 on wrong X-Admin-Password",
+    "Backend POST /api/admin/teaching/upload accepts DOCX (and other types via detect_type)",
+    "Backend GET /api/admin/teaching/files lists uploaded files",
+    "Backend POST /api/admin/teaching/process/{id} returns {started:true}; status flips processed/error within ~45s",
+    "Backend GET /api/admin/teaching/stats returns full shape {files, processed, pending, errors, kb_count, corrections, by_language[]}",
+    "Backend POST /api/admin/teaching/corrections upserts; GET lists; DELETE removes",
+    "Backend GET /api/kb/lookup?q=... is public, returns correction with _source='correction'",
+    "Backend POST /api/translate/text-to-sign returns kb_used>=1 when correction exists for word in text; includes confidence + low_confidence_warning fields in response model",
+    "Frontend desktop nav shows all 9 primary testids + brand-link",
+    "Frontend nav-more dropdown reveals quiz, fingerspelling, community, dictionary, history",
+    "Frontend /traductor → /texto-a-signos redirect works",
+    "Frontend /texto-a-signos shows the H1 'Traductor de texto a signos'",
+    "Frontend /ensenanzas auth gate: wrong password keeps user on login (backend returned 401)",
+    "Frontend /ensenanzas correct password unlocks: tab-upload, tab-kb, tab-corrections, tab-train + teach-stats card",
+    "Frontend kb tab: kb-search, kb-lang and kb-grid all present (grid populated by prior test data)",
+    "Frontend corrections tab: all 9 form testids present (cor-word/lang/hands/mouth/expression/body/status/notes/save)",
+    "Frontend train tab: train-reprocess-pending button present",
+    "Frontend Admin badge appears in nav after admin login (shared AdminAuthContext + localStorage works)",
+    "Frontend existing routes still load: /, /traducir-en-vivo, /diccionario, /llamada, /avatar, /precios"
+  ]
+}

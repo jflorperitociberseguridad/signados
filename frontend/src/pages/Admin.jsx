@@ -19,20 +19,20 @@ import {
   Copy,
   Loader2,
   Shield,
+  GraduationCap,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import {
-  adminLogin,
   adminListKeys,
   adminCreateKey,
   adminDeleteKey,
 } from "../lib/api";
 import { toast } from "sonner";
-
-const STORAGE = "sl-admin-pwd";
+import { useAdminAuth } from "../lib/AdminAuthContext";
 
 export default function Admin() {
-  const [pwd, setPwd] = useState(() => sessionStorage.getItem(STORAGE) || "");
-  const [authed, setAuthed] = useState(false);
+  const { isAdmin, password, login, logout, verifying } = useAdminAuth();
+  const [pwdInput, setPwdInput] = useState("");
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [newLabel, setNewLabel] = useState("");
@@ -40,27 +40,20 @@ export default function Admin() {
   const [creating, setCreating] = useState(false);
   const [createdKey, setCreatedKey] = useState(null);
 
-  const tryLogin = async (p) => {
-    try {
-      await adminLogin(p);
-      sessionStorage.setItem(STORAGE, p);
-      setAuthed(true);
-      load(p);
-    } catch {
-      toast.error("Contraseña incorrecta");
-      sessionStorage.removeItem(STORAGE);
-    }
+  const tryLogin = async () => {
+    const ok = await login(pwdInput);
+    if (!ok) toast.error("Contraseña incorrecta");
   };
 
   useEffect(() => {
-    if (pwd) tryLogin(pwd);
+    if (isAdmin) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAdmin]);
 
-  const load = async (p) => {
+  const load = async () => {
     setLoading(true);
     try {
-      const data = await adminListKeys(p);
+      const data = await adminListKeys(password);
       setItems(data);
     } catch {
       toast.error("Error cargando keys");
@@ -73,10 +66,10 @@ export default function Admin() {
     if (!newLabel.trim()) return;
     setCreating(true);
     try {
-      const k = await adminCreateKey(pwd, newLabel.trim(), newLimit);
+      const k = await adminCreateKey(password, newLabel.trim(), newLimit);
       setCreatedKey(k.key);
       setNewLabel("");
-      load(pwd);
+      load();
       toast.success("Key creada");
     } catch (e) {
       toast.error("Error", { description: e?.response?.data?.detail || e?.message });
@@ -87,11 +80,11 @@ export default function Admin() {
 
   const remove = async (id) => {
     if (!window.confirm("¿Borrar esta API key?")) return;
-    await adminDeleteKey(pwd, id);
-    load(pwd);
+    await adminDeleteKey(password, id);
+    load();
   };
 
-  if (!authed) {
+  if (!isAdmin) {
     return (
       <div className="max-w-md mx-auto px-4 py-16">
         <Card className="p-8 border border-slate-200 dark:border-slate-700 rounded-2xl">
@@ -107,17 +100,24 @@ export default function Admin() {
           <Input
             data-testid="admin-pwd"
             type="password"
-            value={pwd}
-            onChange={(e) => setPwd(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && tryLogin(pwd)}
+            value={pwdInput}
+            onChange={(e) => setPwdInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && tryLogin()}
             placeholder="Contraseña"
           />
           <Button
             data-testid="admin-login-button"
-            onClick={() => tryLogin(pwd)}
+            onClick={tryLogin}
+            disabled={verifying}
             className="btn-ikb mt-4 w-full h-11"
           >
-            <Shield className="w-4 h-4 mr-2" /> Entrar
+            {verifying ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <>
+                <Shield className="w-4 h-4 mr-2" /> Entrar
+              </>
+            )}
           </Button>
         </Card>
       </div>
@@ -139,14 +139,12 @@ export default function Admin() {
             terceros.
           </p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => {
-            sessionStorage.removeItem(STORAGE);
-            setAuthed(false);
-            setPwd("");
-          }}
-        >
+        <Link to="/ensenanzas">
+          <Button data-testid="admin-go-teaching" variant="outline" className="border-emerald-300 text-emerald-700 hover:bg-emerald-50">
+            <GraduationCap className="w-4 h-4 mr-1.5" /> Enseñanzas
+          </Button>
+        </Link>
+        <Button data-testid="admin-logout" variant="outline" onClick={logout}>
           Salir
         </Button>
       </div>

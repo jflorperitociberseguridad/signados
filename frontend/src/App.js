@@ -1,6 +1,6 @@
 import "@/App.css";
 import { useEffect } from "react";
-import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation, Navigate } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import Layout from "@/components/Layout";
 import Home from "@/pages/Home";
@@ -19,7 +19,9 @@ import Pricing from "@/pages/Pricing";
 import Admin from "@/pages/Admin";
 import AvatarSign from "@/pages/AvatarSign";
 import VideoCall from "@/pages/VideoCall";
+import Ensenanzas from "@/pages/Ensenanzas";
 import OfflineIndicator from "@/components/OfflineIndicator";
+import { AdminAuthProvider } from "@/lib/AdminAuthContext";
 import { trackEvent } from "@/lib/api";
 
 function PageTracker() {
@@ -40,29 +42,34 @@ if (typeof window !== "undefined" && "serviceWorker" in navigator) {
 export default function App() {
   return (
     <div className="App">
-      <BrowserRouter>
-        <PageTracker />
-        <Routes>
-          <Route element={<Layout />}>
-            <Route path="/" element={<Home />} />
-            <Route path="/traducir-en-vivo" element={<LiveTranslation />} />
-            <Route path="/texto-a-signos" element={<TextToSign />} />
-            <Route path="/alfabeto" element={<Fingerspelling />} />
-            <Route path="/diccionario" element={<Dictionary />} />
-            <Route path="/historial" element={<HistoryPage />} />
-            <Route path="/conversacion" element={<Conversation />} />
-            <Route path="/practica" element={<Practice />} />
-            <Route path="/quiz" element={<Quiz />} />
-            <Route path="/comunidad" element={<CommunitySign />} />
-            <Route path="/avatar" element={<AvatarSign />} />
-            <Route path="/llamada" element={<VideoCall />} />
-            <Route path="/precios" element={<Pricing />} />
-            <Route path="/admin" element={<Admin />} />
-            <Route path="/analytics" element={<Analytics />} />
-            <Route path="/t/:id" element={<SharePage />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+      <AdminAuthProvider>
+        <BrowserRouter>
+          <PageTracker />
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/" element={<Home />} />
+              <Route path="/traducir-en-vivo" element={<LiveTranslation />} />
+              <Route path="/texto-a-signos" element={<TextToSign />} />
+              <Route path="/traductor" element={<Navigate to="/texto-a-signos" replace />} />
+              <Route path="/alfabeto" element={<Fingerspelling />} />
+              <Route path="/diccionario" element={<Dictionary />} />
+              <Route path="/historial" element={<HistoryPage />} />
+              <Route path="/conversacion" element={<Conversation />} />
+              <Route path="/practica" element={<Practice />} />
+              <Route path="/quiz" element={<Quiz />} />
+              <Route path="/comunidad" element={<CommunitySign />} />
+              <Route path="/avatar" element={<AvatarSign />} />
+              <Route path="/llamada" element={<VideoCall />} />
+              <Route path="/precios" element={<Pricing />} />
+              <Route path="/admin" element={<Admin />} />
+              <Route path="/ensenanzas" element={<Ensenanzas />} />
+              <Route path="/enseñanzas" element={<Navigate to="/ensenanzas" replace />} />
+              <Route path="/analytics" element={<Analytics />} />
+              <Route path="/t/:id" element={<SharePage />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </AdminAuthProvider>
       <OfflineIndicator />
       <Toaster richColors position="top-right" />
     </div>

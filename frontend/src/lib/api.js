@@ -165,3 +165,59 @@ export async function getOfflinePack(limit = 30) {
   const { data } = await api.get("/offline/pack", { params: { limit } });
   return data;
 }
+
+// ---- Admin Teaching / KB ----
+const adminH = (pwd) => ({ headers: { "X-Admin-Password": pwd } });
+
+export async function teachingUpload(pwd, file, label = "") {
+  const fd = new FormData();
+  fd.append("file", file);
+  if (label) fd.append("label", label);
+  const { data } = await api.post("/admin/teaching/upload", fd, {
+    headers: { "X-Admin-Password": pwd, "Content-Type": "multipart/form-data" },
+  });
+  return data;
+}
+export async function teachingListFiles(pwd) {
+  const { data } = await api.get("/admin/teaching/files", adminH(pwd));
+  return data;
+}
+export async function teachingDelete(pwd, id) {
+  const { data } = await api.delete(`/admin/teaching/files/${id}`, adminH(pwd));
+  return data;
+}
+export async function teachingProcess(pwd, id) {
+  const { data } = await api.post(`/admin/teaching/process/${id}`, {}, adminH(pwd));
+  return data;
+}
+export async function teachingKnowledge(pwd, { q = "", language = "all", limit = 200 } = {}) {
+  const { data } = await api.get("/admin/teaching/knowledge", {
+    ...adminH(pwd),
+    params: { q, language, limit },
+  });
+  return data;
+}
+export async function teachingDeleteKnowledge(pwd, id) {
+  const { data } = await api.delete(`/admin/teaching/knowledge/${id}`, adminH(pwd));
+  return data;
+}
+export async function teachingUpsertCorrection(pwd, payload) {
+  const { data } = await api.post("/admin/teaching/corrections", payload, adminH(pwd));
+  return data;
+}
+export async function teachingListCorrections(pwd) {
+  const { data } = await api.get("/admin/teaching/corrections", adminH(pwd));
+  return data;
+}
+export async function teachingDeleteCorrection(pwd, id) {
+  const { data } = await api.delete(`/admin/teaching/corrections/${id}`, adminH(pwd));
+  return data;
+}
+export async function teachingStats(pwd) {
+  const { data } = await api.get("/admin/teaching/stats", adminH(pwd));
+  return data;
+}
+export async function kbLookup(q, language) {
+  const { data } = await api.get("/kb/lookup", { params: { q, language } });
+  return data;
+}

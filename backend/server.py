@@ -44,6 +44,7 @@ from emergentintegrations.payments.stripe.checkout import (
 )
 
 import email_service  # type: ignore  # noqa: E402
+import teaching_service  # type: ignore  # noqa: E402
 from rtc_signaling import (  # type: ignore  # noqa: E402
     generate_room_code,
     handle_signaling,
@@ -118,6 +119,11 @@ async def ensure_indexes() -> None:
         await db.api_keys.create_index([("key", 1)], unique=True)
         await db.payment_transactions.create_index([("session_id", 1)], unique=True)
         await db.payment_transactions.create_index([("created_at", -1)])
+        await db.teaching_files.create_index([("id", 1)], unique=True)
+        await db.teaching_files.create_index([("uploaded_at", -1)])
+        await db.knowledge_base.create_index([("word", 1), ("language", 1)])
+        await db.knowledge_base.create_index([("source_file_id", 1)])
+        await db.corrections.create_index([("word", 1), ("language", 1)])
         logger.info("Mongo indexes ensured")
     except Exception as exc:  # pragma: no cover
         logger.warning("Index creation failed: %s", exc)
@@ -151,6 +157,9 @@ class TextToSignResponse(BaseModel):
     language: str
     steps: List[dict]
     summary: str
+    confidence: Optional[str] = None
+    kb_used: Optional[int] = 0
+    low_confidence_warning: Optional[str] = None
 
 
 class FramesRequest(BaseModel):
@@ -308,22 +317,42 @@ async def call_llm_fingerspelling(frames_b64: List[str]) -> dict:
     return _parse_json(raw)
 
 
-async def call_llm_text_to_sign(text: str, target: str) -> dict:
+async def call_llm_text_to_sign(text: str, target: str, kb_hints: Optional[List[dict]] = None) -> dict:
     chat = _llm_chat(SIGN_SYSTEM_PROMPT, model=LLM_TEXT_MODEL)
     target_label = {
         "LSE": "Lengua de Signos Española (LSE)",
         "LSM": "Lengua de Signos Mexicana (LSM)",
         "ASL": "American Sign Language (ASL)",
+        "BSL": "British Sign Language (BSL)",
         "auto": "la lengua de signos más común para hablantes de español (preferir LSE)",
     }.get(target or "auto", "auto")
+
+    hints_block = ""
+    if kb_hints:
+        rows = []
+        for h in kb_hints[:8]:
+            src = h.get("_source", "kb")
+            row = (
+                f"- {h.get('word','')} ({h.get('language','?')}) [{src}]: "
+                f"manos={h.get('hands','')} | boca={h.get('mouth','')} | "
+                f"expresión={h.get('expression','')} | cuerpo={h.get('body','')}"
+            )
+            rows.append(row)
+        hints_block = (
+            "\n\nBASE DE CONOCIMIENTO INTERNA — usa estas referencias verificadas con prioridad sobre el conocimiento general. "
+            "Las marcadas como [correction] tienen prioridad MÁXIMA:\n" + "\n".join(rows) + "\n"
+        )
 
     prompt = (
         f"Convierte el siguiente texto en una guía paso a paso para signarlo en {target_label}. "
         "Recuerda que el lenguaje de signos NO es solo manos: incluye también componentes orales "
-        "(boca/labios), expresiones faciales y postura.\n\n"
+        "(boca/labios), expresiones faciales y postura.\n"
+        f"{hints_block}\n"
         f'Texto a signar: "{text}"\n\n'
         'Responde EXCLUSIVAMENTE en JSON válido (sin markdown):\n'
-        '{"language":"LSE|LSM|ASL|...","summary":"resumen breve","steps":[{"step":1,"word":"...","hands":"...","mouth":"...","expression":"...","body":"..."}]}'
+        '{"language":"LSE|LSM|ASL|BSL|...","summary":"resumen breve",'
+        '"confidence":"alta|media|baja",'
+        '"steps":[{"step":1,"word":"...","hands":"...","mouth":"...","expression":"...","body":"...","kb_match":true|false}]}'
     )
     raw = await chat.send_message(UserMessage(text=prompt))
     return _parse_json(raw)
@@ -547,10 +576,24 @@ async def translate_fingerspelling(request: Request, payload: FramesRequest):
 @limiter.limit(RATE_TRANSLATE)
 async def text_to_sign(request: Request, payload: TextToSignRequest):
     try:
-        parsed = await call_llm_text_to_sign(payload.text, payload.target_language or "auto")
+        kb_hints = await kb_augmented_hints(payload.text, payload.target_language or "auto")
+    except Exception:
+        kb_hints = []
+    try:
+        parsed = await call_llm_text_to_sign(
+            payload.text, payload.target_language or "auto", kb_hints=kb_hints
+        )
     except Exception as exc:
         logger.exception("LLM text-to-sign failed")
         raise HTTPException(status_code=502, detail=f"AI error: {exc}")
+
+    confidence = (parsed.get("confidence") or "alta").lower()
+    warn = None
+    if confidence == "baja":
+        warn = (
+            "No tengo suficiente seguridad sobre este signo. "
+            "Se recomienda revisión manual."
+        )
 
     response = TextToSignResponse(
         id=str(uuid.uuid4()),
@@ -558,6 +601,9 @@ async def text_to_sign(request: Request, payload: TextToSignRequest):
         language=parsed.get("language", payload.target_language or "auto"),
         summary=parsed.get("summary", ""),
         steps=parsed.get("steps", []),
+        confidence=confidence,
+        kb_used=len(kb_hints),
+        low_confidence_warning=warn,
     )
 
     item = TranslationItem(
@@ -565,8 +611,8 @@ async def text_to_sign(request: Request, payload: TextToSignRequest):
         source_text=payload.text,
         translated_text=response.summary or payload.text,
         detected_language=response.language,
-        confidence="alta",
-        notes=f"{len(response.steps)} pasos generados",
+        confidence=confidence,
+        notes=f"{len(response.steps)} pasos generados · {len(kb_hints)} KB hints",
     )
     doc = item.model_dump()
     doc["created_at"] = doc["created_at"].isoformat()
@@ -574,7 +620,8 @@ async def text_to_sign(request: Request, payload: TextToSignRequest):
     asyncio.create_task(
         record_event(
             "text_to_sign",
-            {"language": response.language, "steps": len(response.steps), "chars": len(payload.text)},
+            {"language": response.language, "steps": len(response.steps),
+             "chars": len(payload.text), "kb_used": len(kb_hints), "confidence": confidence},
         )
     )
     return response
@@ -1245,6 +1292,327 @@ async def rtc_ice():
 @app.websocket("/api/rtc/{room_id}")
 async def rtc_ws(websocket: WebSocket, room_id: str):
     await handle_signaling(websocket, room_id.upper())
+
+
+# ---------------------------------------------------------------------------
+# Teaching / Knowledge Base (admin only)
+# ---------------------------------------------------------------------------
+TEACHING_MAX_BYTES = int(_env("TEACHING_MAX_MB", "200")) * 1024 * 1024
+
+
+def _llm_chat_factory_for_kb(system: str, model: str) -> LlmChat:
+    return _llm_chat(system, model=model, session=f"kb-{uuid.uuid4()}")
+
+
+async def _kb_lookup(word: str, language: Optional[str] = None, limit: int = 3) -> List[dict]:
+    """Find matching KB + correction entries for a word; corrections take priority."""
+    word_l = (word or "").lower().strip()
+    if not word_l:
+        return []
+    out: List[dict] = []
+    # Corrections first (higher priority)
+    cor_query: dict = {"word": {"$regex": f"^{word_l}", "$options": "i"}}
+    if language and language not in ("auto", "all"):
+        cor_query["language"] = {"$regex": f"^{language}", "$options": "i"}
+    async for c in db.corrections.find(cor_query, {"_id": 0}).limit(limit):
+        out.append({**c, "_source": "correction"})
+    # Then KB
+    kb_query: dict = {"word": {"$regex": f"^{word_l}", "$options": "i"}}
+    if language and language not in ("auto", "all"):
+        kb_query["language"] = {"$regex": f"^{language}", "$options": "i"}
+    async for k in db.knowledge_base.find(kb_query, {"_id": 0}).limit(limit):
+        out.append({**k, "_source": "kb"})
+    return out
+
+
+async def kb_augmented_hints(text: str, language: Optional[str] = None) -> List[dict]:
+    """Look up KB hints for the salient words in `text`."""
+    words = [w for w in (text or "").split() if len(w) >= 3][:8]
+    seen = set()
+    hints: List[dict] = []
+    for w in words:
+        for h in await _kb_lookup(w, language, limit=2):
+            key = (h.get("word", "").lower(), h.get("language", "").lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            hints.append(h)
+    return hints[:8]
+
+
+def _verify_admin_either(request: Request, x_admin_password: str = "") -> None:
+    pwd = x_admin_password or request.headers.get("X-Admin-Password", "")
+    _verify_admin(pwd)
+
+
+# ---- Models ----
+class CorrectionUpsertRequest(BaseModel):
+    word: str = Field(min_length=1, max_length=120)
+    language: str = Field(min_length=1, max_length=24)
+    description: Optional[str] = Field(default="", max_length=600)
+    hands: Optional[str] = Field(default="", max_length=600)
+    mouth: Optional[str] = Field(default="", max_length=400)
+    expression: Optional[str] = Field(default="", max_length=400)
+    body: Optional[str] = Field(default="", max_length=400)
+    status: Optional[str] = Field(default="correct")  # correct | doubtful
+    notes: Optional[str] = Field(default="", max_length=600)
+
+
+# ---- Endpoints ----
+@api_router.post("/admin/teaching/upload")
+@limiter.limit("30/minute")
+async def teaching_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    label: str = Form(""),
+):
+    _verify_admin_either(request)
+
+    file_type = teaching_service.detect_type(file.content_type or "", file.filename or "")
+    if not file_type:
+        raise HTTPException(status_code=400, detail="Tipo de archivo no soportado (PDF/DOCX/imagen/vídeo)")
+
+    file_id = str(uuid.uuid4())
+    safe = teaching_service.safe_name(file.filename or f"file-{file_id}")
+    target = teaching_service.teaching_dir() / f"{file_id}__{safe}"
+
+    bytes_written = 0
+    try:
+        with open(target, "wb") as fh:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > TEACHING_MAX_BYTES:
+                    fh.close()
+                    target.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Archivo demasiado grande (máx {TEACHING_MAX_BYTES // (1024 * 1024)} MB)",
+                    )
+                fh.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Error guardando archivo: {exc}")
+
+    doc = {
+        "id": file_id,
+        "filename": file.filename or safe,
+        "label": label or "",
+        "type": file_type,
+        "size": bytes_written,
+        "path": str(target),
+        "status": "uploaded",
+        "kb_count": 0,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "processed_at": None,
+        "error": None,
+    }
+    await db.teaching_files.insert_one(doc)
+    asyncio.create_task(record_event("teaching_upload", {"type": file_type, "size": bytes_written}))
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/admin/teaching/files")
+async def teaching_list(request: Request):
+    _verify_admin_either(request)
+    docs = await db.teaching_files.find({}, {"_id": 0}).sort("uploaded_at", -1).to_list(500)
+    return docs
+
+
+@api_router.delete("/admin/teaching/files/{file_id}")
+async def teaching_delete(request: Request, file_id: str):
+    _verify_admin_either(request)
+    doc = await db.teaching_files.find_one({"id": file_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    try:
+        Path(doc.get("path", "")).unlink(missing_ok=True)
+    except Exception:
+        pass
+    await db.teaching_files.delete_one({"id": file_id})
+    await db.knowledge_base.delete_many({"source_file_id": file_id})
+    return {"deleted": 1}
+
+
+@api_router.post("/admin/teaching/process/{file_id}")
+@limiter.limit("10/minute")
+async def teaching_process(request: Request, file_id: str):
+    _verify_admin_either(request)
+    doc = await db.teaching_files.find_one({"id": file_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    if doc.get("status") == "processing":
+        raise HTTPException(status_code=409, detail="Ya en proceso")
+
+    await db.teaching_files.update_one(
+        {"id": file_id}, {"$set": {"status": "processing", "error": None}}
+    )
+
+    async def _run():
+        try:
+            path = Path(doc["path"])
+            file_type = doc["type"]
+            text_chunks, images_b64 = await teaching_service.extract_material(path, file_type)
+            kb_items = await teaching_service.mine_with_llm(
+                llm_chat_factory=_llm_chat_factory_for_kb,
+                user_message_factory=UserMessage,
+                image_content_cls=ImageContent,
+                text_model=LLM_TEXT_MODEL,
+                vision_model=LLM_VISION_MODEL,
+                text_chunks=text_chunks,
+                images_b64=images_b64,
+            )
+            # Replace existing entries from this source
+            await db.knowledge_base.delete_many({"source_file_id": file_id})
+            if kb_items:
+                docs = []
+                now = datetime.now(timezone.utc).isoformat()
+                for it in kb_items:
+                    docs.append(
+                        {
+                            "id": str(uuid.uuid4()),
+                            "source_file_id": file_id,
+                            "source_filename": doc.get("filename"),
+                            "source_type": file_type,
+                            "created_at": now,
+                            **it,
+                        }
+                    )
+                await db.knowledge_base.insert_many(docs)
+            await db.teaching_files.update_one(
+                {"id": file_id},
+                {"$set": {
+                    "status": "processed",
+                    "kb_count": len(kb_items),
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                    "error": None,
+                }},
+            )
+            await record_event("teaching_processed", {"type": file_type, "count": len(kb_items)})
+        except Exception as exc:
+            logger.exception("teaching process failed")
+            await db.teaching_files.update_one(
+                {"id": file_id},
+                {"$set": {"status": "error", "error": str(exc)[:400]}},
+            )
+
+    asyncio.create_task(_run())
+    return {"started": True, "id": file_id}
+
+
+@api_router.get("/admin/teaching/knowledge")
+async def teaching_knowledge(
+    request: Request,
+    q: Optional[str] = None,
+    language: Optional[str] = None,
+    limit: int = 200,
+):
+    _verify_admin_either(request)
+    limit = max(1, min(1000, int(limit)))
+    query: dict = {}
+    if q:
+        ql = q.lower().strip()
+        query["$or"] = [
+            {"word": {"$regex": ql, "$options": "i"}},
+            {"hands": {"$regex": ql, "$options": "i"}},
+        ]
+    if language and language not in ("auto", "all"):
+        query["language"] = {"$regex": f"^{language}", "$options": "i"}
+    docs = await db.knowledge_base.find(query, {"_id": 0}).limit(limit).to_list(limit)
+    return docs
+
+
+@api_router.delete("/admin/teaching/knowledge/{kb_id}")
+async def teaching_knowledge_delete(request: Request, kb_id: str):
+    _verify_admin_either(request)
+    res = await db.knowledge_base.delete_one({"id": kb_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Entrada no encontrada")
+    return {"deleted": res.deleted_count}
+
+
+@api_router.post("/admin/teaching/corrections")
+@limiter.limit("60/minute")
+async def teaching_correction_upsert(request: Request, payload: CorrectionUpsertRequest):
+    _verify_admin_either(request)
+    now = datetime.now(timezone.utc).isoformat()
+    word_l = payload.word.lower().strip()
+    lang_l = payload.language.lower().strip()
+    update_doc = {
+        **payload.model_dump(),
+        "word": payload.word.strip(),
+        "language": payload.language.strip(),
+        "updated_at": now,
+    }
+    res = await db.corrections.find_one_and_update(
+        {"word": {"$regex": f"^{word_l}$", "$options": "i"},
+         "language": {"$regex": f"^{lang_l}$", "$options": "i"}},
+        {
+            "$set": update_doc,
+            "$setOnInsert": {
+                "id": str(uuid.uuid4()),
+                "created_at": now,
+            },
+        },
+        upsert=True,
+        return_document=True,
+        projection={"_id": 0},
+    )
+    return res
+
+
+@api_router.get("/admin/teaching/corrections")
+async def teaching_corrections_list(request: Request, limit: int = 500):
+    _verify_admin_either(request)
+    limit = max(1, min(2000, int(limit)))
+    docs = await db.corrections.find({}, {"_id": 0}).sort("updated_at", -1).to_list(limit)
+    return docs
+
+
+@api_router.delete("/admin/teaching/corrections/{cid}")
+async def teaching_correction_delete(request: Request, cid: str):
+    _verify_admin_either(request)
+    res = await db.corrections.delete_one({"id": cid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Corrección no encontrada")
+    return {"deleted": res.deleted_count}
+
+
+@api_router.get("/admin/teaching/stats")
+async def teaching_stats(request: Request):
+    _verify_admin_either(request)
+    files = await db.teaching_files.count_documents({})
+    processed = await db.teaching_files.count_documents({"status": "processed"})
+    pending = await db.teaching_files.count_documents({"status": "uploaded"})
+    errors = await db.teaching_files.count_documents({"status": "error"})
+    kb_count = await db.knowledge_base.count_documents({})
+    corrections = await db.corrections.count_documents({})
+    by_lang = await db.knowledge_base.aggregate(
+        [{"$group": {"_id": "$language", "n": {"$sum": 1}}}, {"$sort": {"n": -1}}]
+    ).to_list(50)
+    return {
+        "files": files,
+        "processed": processed,
+        "pending": pending,
+        "errors": errors,
+        "kb_count": kb_count,
+        "corrections": corrections,
+        "by_language": [{"language": x["_id"] or "?", "count": x["n"]} for x in by_lang],
+    }
+
+
+# Public KB lookup (used by text-to-sign + other consumers)
+@api_router.get("/kb/lookup")
+async def kb_lookup(q: str, language: Optional[str] = None, limit: int = 5):
+    if not q:
+        return {"items": []}
+    items = await _kb_lookup(q, language, limit=max(1, min(20, int(limit))))
+    return {"items": items}
 
 
 # ---- Mount ----

@@ -12,13 +12,14 @@ import {
 } from "../components/ui/select";
 import { textToSign } from "../lib/api";
 import { toast } from "sonner";
-import { Hand, Smile, Eye, User, Loader2, Sparkles } from "lucide-react";
+import { Hand, Smile, Eye, User, Loader2, Sparkles, Languages, AlertTriangle, Database } from "lucide-react";
 
 const LANGS = [
   { value: "auto", label: "Detección automática" },
-  { value: "LSE", label: "LSE — Española" },
+  { value: "LSE", label: "LSE — Lengua de Signos Española" },
   { value: "LSM", label: "LSM — Mexicana" },
   { value: "ASL", label: "ASL — Americana" },
+  { value: "BSL", label: "BSL — Británica" },
 ];
 
 export default function TextToSign() {
@@ -43,13 +44,25 @@ export default function TextToSign() {
 
   return (
     <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-8">
-      <h1 className="font-display text-3xl sm:text-4xl font-semibold text-slate-900">
-        Texto a signos
-      </h1>
-      <p className="text-slate-600 mt-1 mb-6">
-        Escribe lo que quieres decir y la IA generará una guía paso a paso con
-        manos, labios, expresiones y postura.
-      </p>
+      <div className="flex items-start gap-3 mb-2">
+        <span className="w-10 h-10 rounded-md bg-[#002FA7] text-white flex items-center justify-center shrink-0">
+          <Languages className="w-5 h-5" />
+        </span>
+        <div>
+          <h1 className="font-display text-3xl sm:text-4xl font-semibold text-slate-900 dark:text-slate-100">
+            Traductor de texto a signos
+          </h1>
+          <p className="text-slate-600 dark:text-slate-300 mt-1">
+            Escribe lo que quieres decir y la IA generará una guía paso a paso con
+            manos, labios, expresiones y postura.
+          </p>
+          <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+            <AlertTriangle className="inline w-3 h-3 mr-1" />
+            El lenguaje de signos puede variar según país, región o comunidad.
+          </p>
+        </div>
+      </div>
+      <div className="mb-6"></div>
 
       <div className="grid lg:grid-cols-5 gap-6">
         <Card className="lg:col-span-2 p-6 border border-slate-200 bg-white rounded-xl h-fit">
@@ -147,18 +160,50 @@ export default function TextToSign() {
 
           {result && !busy && (
             <div className="space-y-4">
-              <Card className="p-5 border border-slate-200 bg-slate-50 rounded-xl">
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="text-sm font-medium text-slate-600">
+              {result.low_confidence_warning && (
+                <Card
+                  data-testid="t2s-low-confidence"
+                  className="p-4 border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900 rounded-xl flex items-start gap-3"
+                >
+                  <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+                  <div className="text-sm text-amber-900 dark:text-amber-100">
+                    {result.low_confidence_warning}
+                  </div>
+                </Card>
+              )}
+              <Card className="p-5 border border-slate-200 bg-slate-50 rounded-xl dark:bg-slate-900 dark:border-slate-700">
+                <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                  <span className="text-sm font-medium text-slate-600 dark:text-slate-300">
                     Resumen
                   </span>
-                  <Badge className="bg-[#002FA7] text-white border-0">
-                    {result.language}
-                  </Badge>
+                  <div className="flex items-center gap-1.5">
+                    {result.kb_used > 0 && (
+                      <Badge data-testid="t2s-kb-badge" className="bg-emerald-100 text-emerald-700 border-emerald-200">
+                        <Database className="w-3 h-3 mr-1" /> {result.kb_used} hint{result.kb_used > 1 ? "s" : ""} de KB
+                      </Badge>
+                    )}
+                    {result.confidence && (
+                      <Badge
+                        data-testid="t2s-confidence"
+                        className={`border-0 ${
+                          result.confidence === "alta"
+                            ? "bg-emerald-500 text-white"
+                            : result.confidence === "media"
+                              ? "bg-amber-500 text-white"
+                              : "bg-red-500 text-white"
+                        }`}
+                      >
+                        Confianza: {result.confidence}
+                      </Badge>
+                    )}
+                    <Badge className="bg-[#002FA7] text-white border-0">
+                      {result.language}
+                    </Badge>
+                  </div>
                 </div>
                 <p
                   data-testid="t2s-summary"
-                  className="font-display text-lg text-slate-900 leading-snug"
+                  className="font-display text-lg text-slate-900 dark:text-slate-100 leading-snug"
                 >
                   {result.summary}
                 </p>
