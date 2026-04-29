@@ -1492,7 +1492,7 @@ async def teaching_replace(
         "size": bytes_written,
         "path": str(target),
         "status": "uploaded",
-        "kb_count": doc.get("kb_count", 0),
+        "kb_count": 0,  # KB rows for this file are purged on replace
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
         "processed_at": None,
         "error": None,
@@ -1500,6 +1500,8 @@ async def teaching_replace(
     if label:
         update["label"] = label
     await db.teaching_files.update_one({"id": file_id}, {"$set": update})
+    # Purge stale KB entries — file content changed, old extractions no longer apply
+    await db.knowledge_base.delete_many({"source_file_id": file_id})
     return {**doc, **update, "id": file_id}
 
 

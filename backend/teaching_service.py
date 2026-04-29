@@ -216,7 +216,7 @@ def _parse_kb_json(raw: str) -> List[dict]:
                 "expression": (it.get("expression") or "")[:400],
                 "body": (it.get("body") or "")[:400],
                 "examples": [str(x)[:200] for x in (it.get("examples") or [])[:5]],
-                "confidence": (it.get("confidence") or "media").lower()[:8],
+                "confidence": (it.get("confidence") or "media").strip().lower()[:8],
             }
         )
     return cleaned

@@ -95,6 +95,20 @@
 - Frontend shows: green KB badge, color-coded confidence pill, amber low-confidence warning card
 - **17 new admin endpoints** under `/api/admin/teaching/*` + public `/api/kb/lookup`
 
+### Phase 2 — Block E (Feb 2026) — Realistic GLB avatar + Enseñanzas v2
+- **Realistic Avatar GLB**: Mixamo Xbot model (`/models/avatar.glb`, 2.8 MB) loaded via `GLTFLoader` with full body skeleton. New file `lib/avatarRealistic.js` with bone-mapping for: shoulder/arm/forearm/hand/wrist + 5 fingers × 3 phalanges per hand + head/spine.
+- 17 sign poses adapted to Mixamo bones (absolute local rotations); idle has natural arm-down rest pose; pose interpolation with smoothstep easing
+- New **mode selector** on `/avatar` page: "Realista (GLB)" vs "Estilizado". Toggle disposes/recreates avatars cleanly. Default = Realista; auto-fallback to Estilizado if GLB load fails.
+- Enseñanzas v2:
+  - **PUT /api/admin/teaching/files/{id}** — replace binary; auto-purges KB entries (canonical: stale extractions removed on replace)
+  - **PATCH /api/admin/teaching/files/{id}** — update label only
+  - **GET /api/admin/teaching/knowledge?confidence=baja|media|alta** — filter by confidence
+  - "Mostrar solo signos dudosos" quick toggle in KB tab
+  - Per-row **replace** button next to reprocess/delete
+- **Global LanguageVariantContext** (`lib/LanguageVariantContext.jsx`): localStorage-backed (`signlang.variant.v1`), default `LSE`, exposed app-wide. Variants: LSE (priority) · ASL · BSL · LSM · LIBRAS · auto.
+- `/texto-a-signos` now defaults to the global variant; changing it elsewhere syncs back.
+- Variant manager card at top of `/ensenanzas` so admins can change the active variant for the whole app from one place.
+
 ## Backlog (P1)
 - TURN server config (currently STUN-only — production guidance in DEPLOY.md)
 - Multi-replica WebRTC signaling (Redis Pub/Sub)
