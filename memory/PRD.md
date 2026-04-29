@@ -114,6 +114,22 @@
 - Same Mixamo skeleton naming → **all 17 poses + bone-mapping work without code changes**
 - Visual upgrade: from grey faceless robot → fully-textured young woman, fitting "figura de avatar humana" request
 
+### Phase 2 — Block G (Feb 2026) — Vídeos de referencia + Avatar enlazado
+- **Tab "Vídeos" en /ensenanzas** separado de "Subir manuales": galería con preview reproducible (`<video>` con blob URL autenticado), badges de signos extraídos, botones reprocesar/borrar
+- **Backend endpoints nuevos** (admin-auth):
+  - `GET /api/admin/teaching/videos` — lista solo los archivos `type=video` con sus signos KB enlazados
+  - `GET /api/teaching/video-for-word?word=&language=` — encuentra el primer vídeo cuyo KB matchee la palabra dada
+  - `GET /api/admin/teaching/file-stream/{id}` — sirve el binario con `FileResponse` (mime correcto por tipo)
+- **Avatar 3D enlazado** (admin-only): cuando el avatar reproduce una palabra, si hay un vídeo subido que contiene esa seña, aparece automáticamente un mini-player en la esquina inferior izquierda del canvas — comparas el avatar con el humano real signando esa palabra
+- Cumple los 7 requisitos del documento "Enseñanzas":
+  1. ✅ Sección privada con auth admin
+  2. ✅ Subir PDF/Word/Imágenes/Vídeos
+  3. ✅ Tab dedicado a vídeos de referencia
+  4. ✅ Base de conocimiento con extracción IA (vocab/manos/boca/expresión/cuerpo/ejemplos/variantes)
+  5. ✅ Correcciones manuales con prioridad MAX
+  6. ✅ Entrenar IA dashboard
+  7. ✅ Vídeos como referencia visual del avatar
+
 ## Backlog (P1)
 - TURN server config (currently STUN-only — production guidance in DEPLOY.md)
 - Multi-replica WebRTC signaling (Redis Pub/Sub)

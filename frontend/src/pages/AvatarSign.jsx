@@ -15,11 +15,13 @@ import {
   UserCircle2,
   Wand2,
 } from "lucide-react";
-import { textToSign } from "../lib/api";
+import { textToSign, videoForWord, fetchVideoBlobUrl } from "../lib/api";
 import { toast } from "sonner";
 import { buildAvatar } from "../lib/avatarRig";
 import { PoseAnimator, POSE_KEYS } from "../lib/avatarPoses";
 import { RealisticAvatar } from "../lib/avatarRealistic";
+import { useAdminAuth } from "../lib/AdminAuthContext";
+import { useLanguageVariant } from "../lib/LanguageVariantContext";
 
 /**
  * SCENE_REGISTRY — module-level registry keyed by the mount DOM element.
@@ -72,6 +74,13 @@ export default function AvatarSign() {
   const [playing, setPlaying] = useState(false);
   const [currentWord, setCurrentWord] = useState("");
   const [speed, setSpeed] = useState(1.0);
+
+  // Reference video overlay (admin only)
+  const { isAdmin, password } = useAdminAuth();
+  const { variant } = useLanguageVariant();
+  const [refVideo, setRefVideo] = useState(null); // { url, label, kb }
+  const [refVideoLoading, setRefVideoLoading] = useState(false);
+  const refBlobRef = useRef(null);
 
   // ----- Initialize Three.js scene -----
   useEffect(() => {
@@ -445,6 +454,43 @@ export default function AvatarSign() {
     setPlaying(false);
   };
 
+  // ----- Reference video lookup (admin only) -----
+  // When the current word changes, ask the backend whether there's an
+  // uploaded video that contains this sign. If so, fetch & show it.
+  useEffect(() => {
+    let cancelled = false;
+    if (refBlobRef.current) {
+      try {
+        URL.revokeObjectURL(refBlobRef.current);
+      } catch {}
+      refBlobRef.current = null;
+    }
+    setRefVideo(null);
+    if (!isAdmin || !currentWord) return;
+
+    setRefVideoLoading(true);
+    (async () => {
+      try {
+        const data = await videoForWord(password, currentWord, variant);
+        if (cancelled || !data?.video) return;
+        const url = await fetchVideoBlobUrl(password, data.video.file_id);
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        refBlobRef.current = url;
+        setRefVideo({ url, label: data.video.label || data.video.filename, kb: data.kb });
+      } catch {
+        // No video found, ignore
+      } finally {
+        if (!cancelled) setRefVideoLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWord, isAdmin, password, variant]);
+
   const resetCam = () => {
     orbitRef.current.azim = 0;
     orbitRef.current.polar = 1.45;
@@ -555,6 +601,28 @@ export default function AvatarSign() {
                 <Badge className="bg-[#002FA7] text-white border-0 text-base px-4 py-1.5 shadow-lg">
                   Signando: <strong className="ml-1.5">{currentWord}</strong>
                 </Badge>
+              </div>
+            )}
+
+            {/* Admin-only reference video overlay */}
+            {isAdmin && refVideo && (
+              <div
+                data-testid="avatar-ref-video"
+                className="absolute left-3 bottom-3 w-44 sm:w-56 rounded-lg overflow-hidden border-2 border-violet-400/80 shadow-xl bg-black"
+              >
+                <div className="aspect-video bg-black">
+                  <video
+                    src={refVideo.url}
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+                <div className="bg-violet-600 text-white text-[10px] px-2 py-1 truncate">
+                  📹 Referencia: {refVideo.label}
+                </div>
               </div>
             )}
           </div>

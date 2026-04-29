@@ -39,6 +39,7 @@ import {
   Lock,
   ReplaceAll,
   Globe2,
+  Film,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAdminAuth } from "../lib/AdminAuthContext";
@@ -55,6 +56,8 @@ import {
   teachingListCorrections,
   teachingDeleteCorrection,
   teachingStats,
+  teachingVideos,
+  fetchVideoBlobUrl,
 } from "../lib/api";
 
 const STATUS_BADGE = {
@@ -116,6 +119,10 @@ export default function Ensenanzas() {
   const replaceInputRef = useRef(null);
   const replacingRef = useRef(null); // file_id being replaced
 
+  // Reference videos
+  const [videos, setVideos] = useState([]);
+  const [videoBlobs, setVideoBlobs] = useState({}); // file_id -> blob URL
+
   // Global variant
   const { variant, setVariant } = useLanguageVariant();
 
@@ -139,16 +146,18 @@ export default function Ensenanzas() {
     if (!isAdmin) return;
     setFilesLoading(true);
     try {
-      const [f, k, c, s] = await Promise.all([
+      const [f, k, c, s, v] = await Promise.all([
         teachingListFiles(password).catch(() => []),
         teachingKnowledge(password, { q: kbQ, language: kbLang, confidence: kbConfidence, limit: 200 }).catch(() => []),
         teachingListCorrections(password).catch(() => []),
         teachingStats(password).catch(() => null),
+        teachingVideos(password).catch(() => []),
       ]);
       setFiles(f);
       setKb(k);
       setCorrections(c);
       setStats(s);
+      setVideos(v);
     } finally {
       setFilesLoading(false);
     }
@@ -428,6 +437,9 @@ export default function Ensenanzas() {
           <TabsTrigger value="upload" data-testid="tab-upload">
             <Upload className="w-4 h-4 mr-1.5" /> Subir
           </TabsTrigger>
+          <TabsTrigger value="videos" data-testid="tab-videos">
+            <Film className="w-4 h-4 mr-1.5" /> Vídeos ({videos.length})
+          </TabsTrigger>
           <TabsTrigger value="kb" data-testid="tab-kb">
             <Database className="w-4 h-4 mr-1.5" /> Conocimiento ({stats?.kb_count || 0})
           </TabsTrigger>
@@ -562,7 +574,45 @@ export default function Ensenanzas() {
           </Card>
         </TabsContent>
 
-        {/* ---- TAB 2: Knowledge Base ---- */}
+        {/* ---- TAB 1.5: Vídeos de referencia ---- */}
+        <TabsContent value="videos" className="mt-5">
+          <Card className="p-5 mb-5 border border-violet-200 dark:border-violet-900 bg-violet-50/50 dark:bg-violet-950/20 rounded-xl">
+            <h3 className="font-display text-lg font-semibold mb-2 flex items-center gap-2">
+              <Film className="w-5 h-5 text-violet-700" /> Vídeos de referencia visual
+            </h3>
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              Sube vídeos de personas signando y la IA extraerá la configuración
+              de manos, expresiones y movimiento. Estos vídeos sirven después
+              como <strong>referencia visual del avatar</strong>: cuando se reproduce una palabra
+              que aparece en alguno de tus vídeos, se mostrará el clip junto al
+              avatar 3D para comparar.
+            </p>
+          </Card>
+
+          {videos.length === 0 ? (
+            <Card data-testid="videos-empty" className="p-10 text-center text-slate-500 border border-slate-200 dark:border-slate-700 rounded-xl">
+              <Film className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+              <p>Aún no has subido vídeos.</p>
+              <p className="text-xs mt-1">
+                Ve a la pestaña <strong>Subir</strong> y arrastra un .mp4, .mov o .webm.
+              </p>
+            </Card>
+          ) : (
+            <div data-testid="videos-grid" className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              {videos.map((v) => (
+                <VideoReferenceCard
+                  key={v.id}
+                  video={v}
+                  password={password}
+                  blobUrl={videoBlobs[v.id]}
+                  onLoaded={(url) => setVideoBlobs((s) => ({ ...s, [v.id]: url }))}
+                  onDelete={() => removeFile(v.id)}
+                  onReprocess={() => reprocess(v.id)}
+                />
+              ))}
+            </div>
+          )}
+        </TabsContent>
         <TabsContent value="kb" className="mt-5">
           <Card className="p-4 mb-4 border border-slate-200 dark:border-slate-700 rounded-xl">
             <div className="flex flex-col sm:flex-row gap-2">
@@ -958,3 +1008,114 @@ const InfoTile = ({ icon: Icon, title, value, hint }) => (
     <div className="text-xs text-slate-400 mt-0.5">{hint}</div>
   </div>
 );
+
+function VideoReferenceCard({ video, password, blobUrl, onLoaded, onDelete, onReprocess }) {
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (blobUrl || loading) return;
+    let cancelled = false;
+    setLoading(true);
+    fetchVideoBlobUrl(password, video.id)
+      .then((url) => {
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+        } else {
+          onLoaded(url);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setErr("No se pudo cargar el vídeo");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [video.id]);
+
+  return (
+    <Card
+      data-testid={`video-card-${video.id}`}
+      className="overflow-hidden border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-xl flex flex-col"
+    >
+      <div className="aspect-video bg-slate-950 relative flex items-center justify-center">
+        {blobUrl ? (
+          <video
+            data-testid={`video-player-${video.id}`}
+            src={blobUrl}
+            controls
+            playsInline
+            className="w-full h-full object-contain"
+          />
+        ) : loading ? (
+          <Loader2 className="w-8 h-8 animate-spin text-white/60" />
+        ) : (
+          <span className="text-white/50 text-sm">{err || "Vídeo no disponible"}</span>
+        )}
+      </div>
+      <div className="p-3 flex-1 flex flex-col">
+        <div className="font-medium text-sm truncate">
+          {video.label ? `${video.label} · ` : ""}
+          {video.filename}
+        </div>
+        <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-2.5">
+          <span>{(video.size / (1024 * 1024)).toFixed(1)} MB</span>
+          {video.kb_count > 0 && (
+            <span className="text-emerald-700 dark:text-emerald-300">
+              +{video.kb_count} signos extraídos
+            </span>
+          )}
+        </div>
+        {(video.kb_words || []).length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {(video.kb_words || []).slice(0, 6).map((w, i) => (
+              <Badge
+                key={i}
+                className={`text-[10px] border-0 ${
+                  w.confidence === "alta"
+                    ? "bg-emerald-100 text-emerald-700"
+                    : w.confidence === "media"
+                      ? "bg-amber-100 text-amber-700"
+                      : "bg-slate-100 text-slate-600"
+                }`}
+              >
+                {w.word}
+              </Badge>
+            ))}
+            {(video.kb_words || []).length > 6 && (
+              <span className="text-[10px] text-slate-400 self-center">
+                +{video.kb_words.length - 6} más
+              </span>
+            )}
+          </div>
+        )}
+        <div className="flex gap-1.5 mt-auto pt-3 border-t border-slate-100 dark:border-slate-800">
+          <Button
+            data-testid={`video-reprocess-${video.id}`}
+            size="sm"
+            variant="outline"
+            onClick={onReprocess}
+            disabled={video.status === "processing"}
+            className="flex-1"
+          >
+            <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+            Re-procesar
+          </Button>
+          <Button
+            data-testid={`video-delete-${video.id}`}
+            size="sm"
+            variant="ghost"
+            onClick={onDelete}
+            className="text-slate-400 hover:text-red-600"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}

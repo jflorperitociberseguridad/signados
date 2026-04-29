@@ -23,7 +23,7 @@ from typing import List, Optional
 
 import cv2  # type: ignore
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -1698,6 +1698,84 @@ async def kb_lookup(q: str, language: Optional[str] = None, limit: int = 5):
         return {"items": []}
     items = await _kb_lookup(q, language, limit=max(1, min(20, int(limit))))
     return {"items": items}
+
+
+# ---- Video reference helpers ----
+@api_router.get("/admin/teaching/videos")
+async def teaching_videos(request: Request):
+    """List all uploaded reference videos with their KB summaries."""
+    _verify_admin_either(request)
+    docs = await db.teaching_files.find(
+        {"type": "video"}, {"_id": 0}
+    ).sort("uploaded_at", -1).to_list(500)
+    out = []
+    for d in docs:
+        kb = await db.knowledge_base.find(
+            {"source_file_id": d["id"]}, {"_id": 0, "word": 1, "language": 1, "confidence": 1}
+        ).limit(50).to_list(50)
+        out.append({**d, "kb_words": kb})
+    return out
+
+
+@api_router.get("/teaching/video-for-word")
+async def video_for_word(
+    request: Request,
+    word: str,
+    language: Optional[str] = None,
+):
+    """
+    Find the most-relevant uploaded reference video for a given word.
+    Admin-only: requires X-Admin-Password (the avatar overlay shows this only
+    to admins; non-admin viewers don't see KB videos).
+    """
+    _verify_admin_either(request)
+    word_l = (word or "").lower().strip()
+    if not word_l:
+        return {"video": None}
+    kb_query: dict = {"word": {"$regex": f"^{word_l}", "$options": "i"}, "source_type": "video"}
+    if language and language not in ("auto", "all"):
+        kb_query["language"] = {"$regex": f"^{language}", "$options": "i"}
+    kb = await db.knowledge_base.find_one(kb_query, {"_id": 0})
+    if not kb:
+        return {"video": None}
+    f = await db.teaching_files.find_one({"id": kb["source_file_id"]}, {"_id": 0})
+    if not f:
+        return {"video": None}
+    return {
+        "video": {
+            "file_id": f["id"],
+            "filename": f["filename"],
+            "label": f.get("label", ""),
+            "stream_url": f"/api/admin/teaching/file-stream/{f['id']}",
+        },
+        "kb": kb,
+    }
+
+
+@api_router.get("/admin/teaching/file-stream/{file_id}")
+async def teaching_file_stream(request: Request, file_id: str):
+    """Stream the binary of an uploaded teaching file (admin-auth)."""
+    _verify_admin_either(request)
+    doc = await db.teaching_files.find_one({"id": file_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    p = Path(doc.get("path", ""))
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Archivo no disponible")
+    media = {
+        "video": "video/mp4",
+        "image": "image/jpeg",
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }.get(doc.get("type", ""), "application/octet-stream")
+    if doc.get("type") == "video":
+        ext = p.suffix.lower()
+        media = {
+            ".webm": "video/webm",
+            ".mov": "video/quicktime",
+            ".mp4": "video/mp4",
+        }.get(ext, "video/mp4")
+    return FileResponse(str(p), media_type=media, filename=doc.get("filename", "file"))
 
 
 # ---- Mount ----

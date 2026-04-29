@@ -230,6 +230,31 @@ export async function teachingStats(pwd) {
   const { data } = await api.get("/admin/teaching/stats", adminH(pwd));
   return data;
 }
+export async function teachingVideos(pwd) {
+  const { data } = await api.get("/admin/teaching/videos", adminH(pwd));
+  return data;
+}
+export async function videoForWord(pwd, word, language) {
+  const { data } = await api.get("/teaching/video-for-word", {
+    ...adminH(pwd),
+    params: { word, language },
+  });
+  return data;
+}
+export function teachingFileStreamUrl(fileId) {
+  // Note: this URL still requires X-Admin-Password header. Use it only as
+  // the `src` of an authenticated <video> via the streamWithAuth helper or
+  // pass through fetch + blob URL for cross-origin compatibility.
+  return `${API}/admin/teaching/file-stream/${fileId}`;
+}
+export async function fetchVideoBlobUrl(pwd, fileId) {
+  const res = await fetch(teachingFileStreamUrl(fileId), {
+    headers: { "X-Admin-Password": pwd },
+  });
+  if (!res.ok) throw new Error("video fetch failed");
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
 export async function kbLookup(q, language) {
   const { data } = await api.get("/kb/lookup", { params: { q, language } });
   return data;
