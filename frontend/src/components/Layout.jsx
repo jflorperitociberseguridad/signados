@@ -44,6 +44,7 @@ const PRIMARY = [
 
 // Secondary "Más" dropdown
 const MORE = [
+  { to: "/ensenanzas", icon: GraduationCap, label: "Enseñanzas", testId: "nav-teaching", admin: true },
   { to: "/quiz", icon: Brain, label: "Quiz", testId: "nav-quiz" },
   { to: "/alfabeto", icon: SpellCheck, label: "Alfabeto", testId: "nav-fingerspelling" },
   { to: "/comunidad", icon: Users, label: "Comunidad", testId: "nav-community" },
@@ -51,10 +52,8 @@ const MORE = [
   { to: "/historial", icon: History, label: "Historial", testId: "nav-history" },
 ];
 
-// Admin-only links
-const ADMIN_LINKS = [
-  { to: "/ensenanzas", icon: GraduationCap, label: "Enseñanzas", testId: "nav-teaching" },
-];
+// Admin-only links (additional ones, only after login)
+const ADMIN_LINKS = [];
 
 // Bottom-tab quick access on mobile
 const BOTTOM_TABS = [
@@ -101,8 +100,16 @@ function MoreMenu({ items, isAdmin, adminItems, onLogout }) {
               data-testid={it.testId}
               className="flex items-center gap-2 cursor-pointer"
             >
-              <it.icon className="w-4 h-4 text-slate-500" />
-              <span>{it.label}</span>
+              <it.icon className={`w-4 h-4 ${it.admin ? "text-emerald-600" : "text-slate-500"}`} />
+              <span className="flex-1">{it.label}</span>
+              {it.admin && (
+                <span
+                  className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold"
+                  title={isAdmin ? "Acceso admin activo" : "Requiere contraseña admin"}
+                >
+                  {isAdmin ? "✓" : "🔒"}
+                </span>
+              )}
             </NavLink>
           </DropdownMenuItem>
         ))}
