@@ -76,6 +76,25 @@
 - Speed slider (0.4×-2.0×), camera orbit (mouse drag + pinch zoom + reset), quick-pose chips, current-word badge
 - Pose system: `lib/avatarRig.js` (bone hierarchy) + `lib/avatarPoses.js` (PoseAnimator + word→pose mapping)
 
+### Phase 2 — Block D (Feb 2026) — Header reorg + Admin Enseñanzas + KB
+- **Header rework**: 8 primary nav items (Inicio · Traductor · Práctica · En vivo · PRO · Avatar 3D · Llamada · Conversa), "Más" dropdown (Quiz · Alfabeto · Comunidad · Diccionario · Historial), Admin-only entry (Enseñanzas) gated by `useAdminAuth()`
+- "Texto" → "Traductor", `/analytics` → kept, new `/ensenanzas` is the admin home; `/traductor` alias redirects to `/texto-a-signos`
+- Mobile: hamburger primary menu + 5-tab bottom navigation, dark-mode-aware
+- Shared `AdminAuthContext` (localStorage-backed) — login from /admin OR /ensenanzas unlocks the admin pill in the nav and the Enseñanzas link
+- **`/ensenanzas` admin panel** with 4 tabs:
+  1. **Subir manuales** — file upload (PDF/DOCX/IMG/MP4/MOV/WebM, max 200MB) with auto-process
+  2. **Base de conocimiento** — searchable cards (by word, by language) with delete
+  3. **Correcciones manuales** — upsert form (word/language/hands/mouth/expression/body/status/notes), max-priority hints
+  4. **Entrenar IA** — dashboard + "Re-procesar pendientes" + by-language breakdown
+- **Backend pipeline** (`teaching_service.py`):
+  - PDF text via `pypdf`, DOCX via `python-docx`, video frames via `cv2` (8 frames sampled), images via `cv2` resize+JPEG
+  - Mining via GPT-4o-mini (text) + GPT-4o (vision) using `emergentintegrations` + Emergent LLM key
+  - Strict JSON output schema (word/language/hands/mouth/expression/body/examples/confidence)
+  - Async background task with `asyncio.create_task`; status: uploaded → processing → processed | error
+- **KB-augmented text-to-sign**: every `/api/translate/text-to-sign` call now does a lightweight regex-prefix lookup over `corrections` (priority MAX) + `knowledge_base` and injects up to 8 hints into the LLM prompt; response now includes `confidence` (alta/media/baja), `kb_used` count, and `low_confidence_warning` text
+- Frontend shows: green KB badge, color-coded confidence pill, amber low-confidence warning card
+- **17 new admin endpoints** under `/api/admin/teaching/*` + public `/api/kb/lookup`
+
 ## Backlog (P1)
 - TURN server config (currently STUN-only — production guidance in DEPLOY.md)
 - Multi-replica WebRTC signaling (Redis Pub/Sub)
