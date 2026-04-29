@@ -65,8 +65,19 @@ export default function AvatarSign() {
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
-    const w = mount.clientWidth;
-    const h = mount.clientHeight;
+
+    // Guard: in React StrictMode the effect runs twice (mount → cleanup → mount).
+    // WebGL contexts are a limited resource (~16 per page), so creating a new
+    // renderer before the previous one has fully released its context fails
+    // with "Error creating WebGL context". We use a DOM-level flag so the
+    // second invocation is a no-op until the first cleanup completes.
+    if (mount.dataset.glInitialized === "1") return;
+    // Also clean up any leftover canvas (HMR / fast-refresh edge case)
+    while (mount.firstChild) mount.removeChild(mount.firstChild);
+    mount.dataset.glInitialized = "1";
+
+    const w = mount.clientWidth || 640;
+    const h = mount.clientHeight || 480;
 
     const scene = new THREE.Scene();
     sceneRef.current = scene;
@@ -91,7 +102,12 @@ export default function AvatarSign() {
     cam.lookAt(0, 1.55, 0);
     camRef.current = cam;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      powerPreference: "default",
+      failIfMajorPerformanceCaveat: false,
+    });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -263,9 +279,16 @@ export default function AvatarSign() {
       dom.removeEventListener("touchmove", onTMove);
       dom.removeEventListener("touchend", onTEnd);
       try {
+        // Release the WebGL context aggressively so the second StrictMode
+        // mount in dev (or a remount on hot-reload) can acquire a new one.
+        renderer.forceContextLoss?.();
+      } catch {}
+      try {
         renderer.dispose();
         if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
       } catch {}
+      // Clear the guard so the next mount can initialize again
+      delete mount.dataset.glInitialized;
     };
   }, []);
 
