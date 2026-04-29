@@ -21,6 +21,18 @@ import { buildAvatar } from "../lib/avatarRig";
 import { PoseAnimator, POSE_KEYS } from "../lib/avatarPoses";
 import { RealisticAvatar } from "../lib/avatarRealistic";
 
+/**
+ * SCENE_REGISTRY — module-level registry keyed by the mount DOM element.
+ * React.StrictMode double-mounts the component (mount → cleanup → mount),
+ * but the DOM element survives across both mounts. By caching the WebGL
+ * scene against that element, we can:
+ *   1. Skip re-creating the renderer on the second mount
+ *   2. Cancel a pending disposal if the component re-mounts within ~50ms
+ *
+ * This avoids the WebGL context-limit error ("Error creating WebGL context").
+ */
+const SCENE_REGISTRY = new WeakMap();
+
 const SHORTCUTS = [
   "Hola", "Adiós", "Sí", "No", "Por favor", "Gracias",
   "Te quiero", "Yo", "Tú", "Comer", "Beber", "Casa", "Pensar",
@@ -66,16 +78,28 @@ export default function AvatarSign() {
     const mount = mountRef.current;
     if (!mount) return;
 
-    // Guard: in React StrictMode the effect runs twice (mount → cleanup → mount).
-    // WebGL contexts are a limited resource (~16 per page), so creating a new
-    // renderer before the previous one has fully released its context fails
-    // with "Error creating WebGL context". We use a DOM-level flag so the
-    // second invocation is a no-op until the first cleanup completes.
-    if (mount.dataset.glInitialized === "1") return;
-    // Also clean up any leftover canvas (HMR / fast-refresh edge case)
-    while (mount.firstChild) mount.removeChild(mount.firstChild);
-    mount.dataset.glInitialized = "1";
+    // ── StrictMode + WebGL safe-init ──
+    // If the previous mount scheduled a disposal, cancel it and reuse.
+    const cached = SCENE_REGISTRY.get(mount);
+    if (cached) {
+      if (cached.disposeTimer) {
+        clearTimeout(cached.disposeTimer);
+        cached.disposeTimer = null;
+      }
+      // Reuse existing scene/renderer/camera and rebind animation refs
+      sceneRef.current = cached.scene;
+      rendererRef.current = cached.renderer;
+      camRef.current = cached.cam;
+      orbitRef.current = cached.orbit;
+      // Resume the animation loop (we paused it in cleanup)
+      cached.resume?.();
+      return () => {
+        // On the next cleanup, schedule actual disposal (cancellable)
+        cached.disposeTimer = setTimeout(() => cached.dispose?.(), 80);
+      };
+    }
 
+    // First-ever mount: build the scene from scratch.
     const w = mount.clientWidth || 640;
     const h = mount.clientHeight || 480;
 
@@ -237,9 +261,11 @@ export default function AvatarSign() {
     dom.addEventListener("touchmove", onTMove, { passive: true });
     dom.addEventListener("touchend", onTEnd);
 
-    // ----- Animation loop -----
+    // ----- Animation loop (pausable) -----
     const clock = new THREE.Clock();
+    let animActive = true;
     const tick = () => {
+      if (!animActive) return;
       const dt = Math.min(0.05, clock.getDelta());
       stylizedAnimRef.current?.step(dt);
       realisticRef.current?.step(dt);
@@ -267,28 +293,49 @@ export default function AvatarSign() {
     ro.observe(mount);
     window.addEventListener("resize", onResize);
 
+    // Register the scene so a re-mount within 80ms reuses it (StrictMode)
+    const reg = {
+      scene,
+      cam,
+      renderer,
+      orbit: orbitRef.current,
+      disposeTimer: null,
+      resume() {
+        if (animActive) return;
+        animActive = true;
+        clock.start();
+        tick();
+      },
+      dispose() {
+        animActive = false;
+        cancelAnimationFrame(animFrameRef.current);
+        window.removeEventListener("resize", onResize);
+        ro.disconnect();
+        dom.removeEventListener("mousedown", onDown);
+        window.removeEventListener("mouseup", onUp);
+        window.removeEventListener("mousemove", onMove);
+        dom.removeEventListener("wheel", onWheel);
+        dom.removeEventListener("touchstart", onTStart);
+        dom.removeEventListener("touchmove", onTMove);
+        dom.removeEventListener("touchend", onTEnd);
+        try {
+          renderer.forceContextLoss?.();
+        } catch {}
+        try {
+          renderer.dispose();
+          if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
+        } catch {}
+        SCENE_REGISTRY.delete(mount);
+      },
+    };
+    SCENE_REGISTRY.set(mount, reg);
+
     return () => {
+      // Pause the animation loop so a quick re-mount can resume it without re-init.
+      animActive = false;
       cancelAnimationFrame(animFrameRef.current);
-      window.removeEventListener("resize", onResize);
-      ro.disconnect();
-      dom.removeEventListener("mousedown", onDown);
-      window.removeEventListener("mouseup", onUp);
-      window.removeEventListener("mousemove", onMove);
-      dom.removeEventListener("wheel", onWheel);
-      dom.removeEventListener("touchstart", onTStart);
-      dom.removeEventListener("touchmove", onTMove);
-      dom.removeEventListener("touchend", onTEnd);
-      try {
-        // Release the WebGL context aggressively so the second StrictMode
-        // mount in dev (or a remount on hot-reload) can acquire a new one.
-        renderer.forceContextLoss?.();
-      } catch {}
-      try {
-        renderer.dispose();
-        if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
-      } catch {}
-      // Clear the guard so the next mount can initialize again
-      delete mount.dataset.glInitialized;
+      // Schedule disposal — cancelled if the component remounts in <80ms (StrictMode).
+      reg.disposeTimer = setTimeout(() => reg.dispose(), 80);
     };
   }, []);
 
