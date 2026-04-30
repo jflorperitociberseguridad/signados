@@ -130,6 +130,17 @@
   6. ✅ Entrenar IA dashboard
   7. ✅ Vídeos como referencia visual del avatar
 
+### Phase 2 — Block H (Feb 2026) — Configuración IA editable + footer link
+- Movido enlace de "Enseñanzas" del menú "Más" al **footer** (más limpio, menos distracción para usuarios públicos)
+- Nuevo tab **"Configuración IA"** en `/ensenanzas` (data-testid `tab-ai-config`)
+- Endpoints nuevos (admin-auth):
+  - `GET /api/admin/teaching/ai-config` — lee config + lista de modelos disponibles + prompt por defecto
+  - `PUT /api/admin/teaching/ai-config` — guarda text_model, vision_model, system_prompt, max_text_chunks, max_image_batch, video_frames_count, min_confidence_keep, auto_process
+  - `POST /api/admin/teaching/ai-config/reset` — restaura valores por defecto
+  - `POST /api/admin/teaching/ai-config/test` — corre extracción de prueba con la config actual y devuelve nº de signos extraídos
+- UI: modelos (gpt-4o, gpt-4o-mini, claude-sonnet-4-5, gemini-2.5-pro/flash), system prompt editable, sliders para chunks/batch/frames/min_confidence, switch auto-procesar, banner con dirty-state, botones Guardar / Probar / Restaurar default
+- `teaching_service` ahora carga `ai_config` desde DB y respeta sus parámetros en cada extracción
+
 ## Backlog (P1)
 - TURN server config (currently STUN-only — production guidance in DEPLOY.md)
 - Multi-replica WebRTC signaling (Redis Pub/Sub)

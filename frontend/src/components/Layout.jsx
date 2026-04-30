@@ -44,7 +44,6 @@ const PRIMARY = [
 
 // Secondary "Más" dropdown
 const MORE = [
-  { to: "/ensenanzas", icon: GraduationCap, label: "Enseñanzas", testId: "nav-teaching", admin: true },
   { to: "/quiz", icon: Brain, label: "Quiz", testId: "nav-quiz" },
   { to: "/alfabeto", icon: SpellCheck, label: "Alfabeto", testId: "nav-fingerspelling" },
   { to: "/comunidad", icon: Users, label: "Comunidad", testId: "nav-community" },
@@ -251,8 +250,22 @@ export default function Layout() {
       >
         <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-sm text-slate-500 dark:text-slate-400">
           <div>© {new Date().getFullYear()} SignLanguage Pro · Comunicación inclusiva impulsada por IA</div>
-          <div className="flex items-center gap-2">
-            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" /> Servicio operativo
+          <div className="flex items-center gap-4">
+            <NavLink
+              to="/ensenanzas"
+              data-testid="footer-teaching-link"
+              className="flex items-center gap-1.5 hover:text-emerald-600 transition-colors"
+              title={isAdmin ? "Acceso admin activo" : "Zona admin · requiere contraseña"}
+            >
+              <GraduationCap className="w-4 h-4" />
+              <span>Enseñanzas</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-900">
+                {isAdmin ? "✓" : "🔒 Admin"}
+              </span>
+            </NavLink>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" /> Servicio operativo
+            </span>
           </div>
         </div>
       </footer>

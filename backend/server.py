@@ -1299,6 +1299,30 @@ async def rtc_ws(websocket: WebSocket, room_id: str):
 # ---------------------------------------------------------------------------
 TEACHING_MAX_BYTES = int(_env("TEACHING_MAX_MB", "200")) * 1024 * 1024
 
+# AI configuration model with sensible defaults
+DEFAULT_AI_CONFIG = {
+    "text_model": LLM_TEXT_MODEL,        # e.g. gpt-4o-mini
+    "vision_model": LLM_VISION_MODEL,    # e.g. gpt-4o
+    "system_prompt": teaching_service.KB_SYSTEM_PROMPT_DEFAULT,
+    "max_text_chunks": 6,                # how many ~10k-char chunks per file
+    "max_image_batch": 6,                # how many frames per LLM vision call
+    "video_frames_count": 8,             # frames sampled per uploaded video
+    "min_confidence_keep": "baja",       # drop entries below this confidence
+    "auto_process": True,                # process file immediately on upload
+    "updated_at": None,
+    "updated_by": None,
+}
+
+ALLOWED_TEXT_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-5", "gpt-5.2", "claude-sonnet-4.5", "gemini-3-flash"]
+ALLOWED_VISION_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-5", "gpt-5.2", "claude-sonnet-4.5"]
+
+
+async def get_ai_config() -> dict:
+    """Load the AI config doc, falling back to defaults for missing keys."""
+    doc = await db.config.find_one({"_id": "ai_config"}) or {}
+    out = {**DEFAULT_AI_CONFIG, **{k: v for k, v in doc.items() if k != "_id"}}
+    return out
+
 
 def _llm_chat_factory_for_kb(system: str, model: str) -> LlmChat:
     return _llm_chat(system, model=model, session=f"kb-{uuid.uuid4()}")
@@ -1537,18 +1561,30 @@ async def teaching_process(request: Request, file_id: str):
 
     async def _run():
         try:
+            cfg = await get_ai_config()
             path = Path(doc["path"])
             file_type = doc["type"]
-            text_chunks, images_b64 = await teaching_service.extract_material(path, file_type)
+            text_chunks, images_b64 = await teaching_service.extract_material(
+                path, file_type, video_frames=int(cfg.get("video_frames_count") or 8),
+            )
             kb_items = await teaching_service.mine_with_llm(
                 llm_chat_factory=_llm_chat_factory_for_kb,
                 user_message_factory=UserMessage,
                 image_content_cls=ImageContent,
-                text_model=LLM_TEXT_MODEL,
-                vision_model=LLM_VISION_MODEL,
+                text_model=cfg.get("text_model") or LLM_TEXT_MODEL,
+                vision_model=cfg.get("vision_model") or LLM_VISION_MODEL,
                 text_chunks=text_chunks,
                 images_b64=images_b64,
+                system_prompt=cfg.get("system_prompt") or None,
+                max_text_chunks=int(cfg.get("max_text_chunks") or 6),
+                max_image_batch=int(cfg.get("max_image_batch") or 6),
             )
+            # Optional confidence filter
+            min_conf = (cfg.get("min_confidence_keep") or "baja").lower()
+            order = {"alta": 3, "media": 2, "baja": 1}
+            min_rank = order.get(min_conf, 1)
+            kb_items = [k for k in kb_items if order.get(k.get("confidence", "media"), 2) >= min_rank]
+
             # Replace existing entries from this source
             await db.knowledge_base.delete_many({"source_file_id": file_id})
             if kb_items:
@@ -1689,6 +1725,98 @@ async def teaching_stats(request: Request):
         "corrections": corrections,
         "by_language": [{"language": x["_id"] or "?", "count": x["n"]} for x in by_lang],
     }
+
+
+# ---- AI configuration ----
+class AIConfigUpdate(BaseModel):
+    text_model: Optional[str] = None
+    vision_model: Optional[str] = None
+    system_prompt: Optional[str] = Field(default=None, max_length=8000)
+    max_text_chunks: Optional[int] = Field(default=None, ge=1, le=20)
+    max_image_batch: Optional[int] = Field(default=None, ge=1, le=8)
+    video_frames_count: Optional[int] = Field(default=None, ge=2, le=20)
+    min_confidence_keep: Optional[str] = Field(default=None, pattern="^(alta|media|baja)$")
+    auto_process: Optional[bool] = None
+
+
+@api_router.get("/admin/teaching/ai-config")
+async def teaching_get_ai_config(request: Request):
+    _verify_admin_either(request)
+    cfg = await get_ai_config()
+    return {
+        **cfg,
+        "available_text_models": ALLOWED_TEXT_MODELS,
+        "available_vision_models": ALLOWED_VISION_MODELS,
+        "default_system_prompt": teaching_service.KB_SYSTEM_PROMPT_DEFAULT,
+    }
+
+
+@api_router.put("/admin/teaching/ai-config")
+async def teaching_update_ai_config(request: Request, payload: AIConfigUpdate):
+    _verify_admin_either(request)
+    update: dict = {}
+    body = payload.model_dump(exclude_unset=True)
+
+    if "text_model" in body and body["text_model"]:
+        if body["text_model"] not in ALLOWED_TEXT_MODELS:
+            raise HTTPException(status_code=400, detail=f"Modelo de texto no permitido. Usa uno de: {', '.join(ALLOWED_TEXT_MODELS)}")
+        update["text_model"] = body["text_model"]
+    if "vision_model" in body and body["vision_model"]:
+        if body["vision_model"] not in ALLOWED_VISION_MODELS:
+            raise HTTPException(status_code=400, detail=f"Modelo de visión no permitido. Usa uno de: {', '.join(ALLOWED_VISION_MODELS)}")
+        update["vision_model"] = body["vision_model"]
+    for k in ("system_prompt", "max_text_chunks", "max_image_batch",
+              "video_frames_count", "min_confidence_keep", "auto_process"):
+        if k in body:
+            update[k] = body[k]
+
+    if not update:
+        raise HTTPException(status_code=400, detail="Nada que actualizar")
+
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    update["updated_by"] = "admin"
+    await db.config.update_one({"_id": "ai_config"}, {"$set": update}, upsert=True)
+    return await get_ai_config()
+
+
+@api_router.post("/admin/teaching/ai-config/reset")
+async def teaching_reset_ai_config(request: Request):
+    _verify_admin_either(request)
+    await db.config.delete_one({"_id": "ai_config"})
+    return await get_ai_config()
+
+
+@api_router.post("/admin/teaching/ai-config/test")
+@limiter.limit("10/minute")
+async def teaching_test_ai_config(request: Request):
+    """Smoke-test: run the configured text model on a tiny sample to confirm
+    everything is wired (key valid, model name accepted, prompt parses)."""
+    _verify_admin_either(request)
+    cfg = await get_ai_config()
+    sample_text = (
+        "HOLA: mano abierta a la altura de la sien, deslizar hacia adelante. "
+        "Boca articula 'hola'. Sonrisa suave."
+    )
+    try:
+        items = await teaching_service.mine_with_llm(
+            llm_chat_factory=_llm_chat_factory_for_kb,
+            user_message_factory=UserMessage,
+            image_content_cls=ImageContent,
+            text_model=cfg["text_model"],
+            vision_model=cfg["vision_model"],
+            text_chunks=[sample_text],
+            images_b64=[],
+            system_prompt=cfg.get("system_prompt"),
+            max_text_chunks=1,
+        )
+        return {
+            "ok": True,
+            "model_used": cfg["text_model"],
+            "items_extracted": len(items),
+            "preview": items[:2],
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:400]}
 
 
 # Public KB lookup (used by text-to-sign + other consumers)

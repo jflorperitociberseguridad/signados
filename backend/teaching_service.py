@@ -159,7 +159,7 @@ def _video_frames_b64(path: Path, n: int = 6, max_dim: int = 720) -> List[str]:
 # ---------------------------------------------------------------------------
 # IA mining (async)
 # ---------------------------------------------------------------------------
-KB_SYSTEM_PROMPT = """Eres un asistente experto que extrae conocimiento estructurado de lengua de signos a partir de manuales, vídeos e imágenes pedagógicas.
+KB_SYSTEM_PROMPT_DEFAULT = """Eres un asistente experto que extrae conocimiento estructurado de lengua de signos a partir de manuales, vídeos e imágenes pedagógicas.
 
 Tu tarea: identifica todos los SIGNOS / SEÑAS / VOCABULARIO descritos en el material y devuélvelos en JSON.
 
@@ -178,6 +178,9 @@ Devuelve EXCLUSIVAMENTE JSON válido (sin markdown, sin explicaciones extra) con
 
 Si el material no contiene información identificable de signos, devuelve {"items": []}.
 """
+
+# Backwards-compat alias used elsewhere
+KB_SYSTEM_PROMPT = KB_SYSTEM_PROMPT_DEFAULT
 
 
 def _parse_kb_json(raw: str) -> List[dict]:
@@ -231,20 +234,25 @@ async def mine_with_llm(
     vision_model: str,
     text_chunks: List[str],
     images_b64: List[str],
+    system_prompt: Optional[str] = None,
+    max_text_chunks: int = 6,
+    max_image_batch: int = 6,
 ) -> List[dict]:
     """Call the LLM with the available material and return cleaned KB entries.
 
     `text_chunks` and `images_b64` may be empty depending on file type.
+    `system_prompt` overrides the default if provided.
     """
     if not text_chunks and not images_b64:
         return []
 
+    sys_prompt = system_prompt or KB_SYSTEM_PROMPT_DEFAULT
     items: List[dict] = []
 
     # ----- Text path (PDF / DOCX) -----
     if text_chunks:
-        for chunk in text_chunks[:6]:  # safety cap
-            chat = llm_chat_factory(KB_SYSTEM_PROMPT, text_model)
+        for chunk in text_chunks[: max(1, max_text_chunks)]:
+            chat = llm_chat_factory(sys_prompt, text_model)
             prompt = (
                 "Extrae signos del siguiente material y devuélvelos en JSON estricto:\n\n"
                 + chunk[:14000]
@@ -257,10 +265,10 @@ async def mine_with_llm(
 
     # ----- Vision path (image/video frames) -----
     if images_b64:
-        # 6 frames per call max
-        for i in range(0, len(images_b64), 6):
-            batch = images_b64[i : i + 6]
-            chat = llm_chat_factory(KB_SYSTEM_PROMPT, vision_model)
+        batch_size = max(1, min(8, max_image_batch))
+        for i in range(0, len(images_b64), batch_size):
+            batch = images_b64[i : i + batch_size]
+            chat = llm_chat_factory(sys_prompt, vision_model)
             try:
                 raw = await chat.send_message(
                     user_message_factory(
@@ -291,7 +299,11 @@ async def mine_with_llm(
 # ---------------------------------------------------------------------------
 # Process pipeline (called by the API)
 # ---------------------------------------------------------------------------
-async def extract_material(file_path: Path, file_type: str) -> Tuple[List[str], List[str]]:
+async def extract_material(
+    file_path: Path,
+    file_type: str,
+    video_frames: int = 8,
+) -> Tuple[List[str], List[str]]:
     """Return (text_chunks, images_b64) for the file."""
     text_chunks: List[str] = []
     images_b64: List[str] = []
@@ -299,7 +311,6 @@ async def extract_material(file_path: Path, file_type: str) -> Tuple[List[str], 
     if file_type == "pdf":
         text = await asyncio.to_thread(_extract_pdf_text, file_path)
         if text:
-            # Split into ~10k char chunks to fit in the context window
             CHUNK = 10000
             for i in range(0, len(text), CHUNK):
                 text_chunks.append(text[i : i + CHUNK])
@@ -314,7 +325,8 @@ async def extract_material(file_path: Path, file_type: str) -> Tuple[List[str], 
         if b64:
             images_b64.append(b64)
     elif file_type == "video":
-        frames = await asyncio.to_thread(_video_frames_b64, file_path, 8)
+        n = max(2, min(20, int(video_frames or 8)))
+        frames = await asyncio.to_thread(_video_frames_b64, file_path, n)
         images_b64.extend(frames)
 
     return text_chunks, images_b64

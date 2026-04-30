@@ -40,6 +40,9 @@ import {
   ReplaceAll,
   Globe2,
   Film,
+  Settings2,
+  Wand2,
+  RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAdminAuth } from "../lib/AdminAuthContext";
@@ -58,6 +61,10 @@ import {
   teachingStats,
   teachingVideos,
   fetchVideoBlobUrl,
+  teachingGetAIConfig,
+  teachingUpdateAIConfig,
+  teachingResetAIConfig,
+  teachingTestAIConfig,
 } from "../lib/api";
 
 const STATUS_BADGE = {
@@ -123,6 +130,13 @@ export default function Ensenanzas() {
   const [videos, setVideos] = useState([]);
   const [videoBlobs, setVideoBlobs] = useState({}); // file_id -> blob URL
 
+  // AI Config
+  const [aiCfg, setAiCfg] = useState(null);
+  const [aiCfgDraft, setAiCfgDraft] = useState(null);
+  const [aiCfgSaving, setAiCfgSaving] = useState(false);
+  const [aiCfgTesting, setAiCfgTesting] = useState(false);
+  const [aiCfgTestResult, setAiCfgTestResult] = useState(null);
+
   // Global variant
   const { variant, setVariant } = useLanguageVariant();
 
@@ -146,18 +160,23 @@ export default function Ensenanzas() {
     if (!isAdmin) return;
     setFilesLoading(true);
     try {
-      const [f, k, c, s, v] = await Promise.all([
+      const [f, k, c, s, v, ai] = await Promise.all([
         teachingListFiles(password).catch(() => []),
         teachingKnowledge(password, { q: kbQ, language: kbLang, confidence: kbConfidence, limit: 200 }).catch(() => []),
         teachingListCorrections(password).catch(() => []),
         teachingStats(password).catch(() => null),
         teachingVideos(password).catch(() => []),
+        teachingGetAIConfig(password).catch(() => null),
       ]);
       setFiles(f);
       setKb(k);
       setCorrections(c);
       setStats(s);
       setVideos(v);
+      if (ai) {
+        setAiCfg(ai);
+        setAiCfgDraft((d) => d || ai);
+      }
     } finally {
       setFilesLoading(false);
     }
@@ -351,6 +370,70 @@ export default function Ensenanzas() {
     refreshAll();
   };
 
+  // ----- AI Config handlers -----
+  const saveAiConfig = async () => {
+    if (!aiCfgDraft) return;
+    setAiCfgSaving(true);
+    try {
+      const updated = await teachingUpdateAIConfig(password, {
+        text_model: aiCfgDraft.text_model,
+        vision_model: aiCfgDraft.vision_model,
+        system_prompt: aiCfgDraft.system_prompt,
+        max_text_chunks: parseInt(aiCfgDraft.max_text_chunks, 10),
+        max_image_batch: parseInt(aiCfgDraft.max_image_batch, 10),
+        video_frames_count: parseInt(aiCfgDraft.video_frames_count, 10),
+        min_confidence_keep: aiCfgDraft.min_confidence_keep,
+        auto_process: !!aiCfgDraft.auto_process,
+      });
+      setAiCfg(updated);
+      setAiCfgDraft(updated);
+      toast.success("Configuración guardada");
+    } catch (e) {
+      toast.error("Error guardando configuración", {
+        description: e?.response?.data?.detail || e?.message,
+      });
+    } finally {
+      setAiCfgSaving(false);
+    }
+  };
+
+  const resetAiConfig = async () => {
+    if (!window.confirm("¿Restaurar la configuración por defecto?")) return;
+    try {
+      const cfg = await teachingResetAIConfig(password);
+      setAiCfg(cfg);
+      setAiCfgDraft(cfg);
+      toast.success("Configuración restaurada a valores por defecto");
+    } catch {
+      toast.error("Error restaurando configuración");
+    }
+  };
+
+  const testAiConfig = async () => {
+    setAiCfgTesting(true);
+    setAiCfgTestResult(null);
+    try {
+      // Save first if there are unsaved changes
+      if (JSON.stringify(aiCfgDraft) !== JSON.stringify(aiCfg)) {
+        await saveAiConfig();
+      }
+      const res = await teachingTestAIConfig(password);
+      setAiCfgTestResult(res);
+      if (res.ok) {
+        toast.success(`Test OK · ${res.items_extracted} signo(s) extraídos con ${res.model_used}`);
+      } else {
+        toast.error("Test falló", { description: res.error });
+      }
+    } catch (e) {
+      toast.error("Error en el test", { description: e?.message });
+    } finally {
+      setAiCfgTesting(false);
+    }
+  };
+
+  const draft = aiCfgDraft || {};
+  const dirty = aiCfg && JSON.stringify(aiCfgDraft) !== JSON.stringify(aiCfg);
+
   return (
     <div className="max-w-[1400px] mx-auto px-4 sm:px-8 py-8">
       {/* Header */}
@@ -448,6 +531,9 @@ export default function Ensenanzas() {
           </TabsTrigger>
           <TabsTrigger value="train" data-testid="tab-train">
             <Sparkles className="w-4 h-4 mr-1.5" /> Entrenar IA
+          </TabsTrigger>
+          <TabsTrigger value="ai" data-testid="tab-ai-config">
+            <Settings2 className="w-4 h-4 mr-1.5" /> Configuración IA
           </TabsTrigger>
         </TabsList>
 
@@ -983,6 +1069,271 @@ export default function Ensenanzas() {
             </div>
           </Card>
         </TabsContent>
+
+        {/* ---- TAB 5: Configuración IA ---- */}
+        <TabsContent value="ai" className="mt-5">
+          {!draft.text_model ? (
+            <Card className="p-10 text-center text-slate-500 border border-slate-200 dark:border-slate-700 rounded-xl">
+              <Loader2 className="w-6 h-6 animate-spin mx-auto" />
+            </Card>
+          ) : (
+            <div className="grid lg:grid-cols-3 gap-5">
+              {/* Settings */}
+              <div className="lg:col-span-2 space-y-5">
+                <Card className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl">
+                  <h3 className="font-display text-lg font-semibold mb-1 flex items-center gap-2">
+                    <Settings2 className="w-5 h-5 text-[#002FA7]" /> Modelos
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-4">
+                    Elige qué modelos usa la IA para analizar tus archivos.
+                  </p>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium block mb-1">
+                        Modelo para texto (PDF/Word)
+                      </label>
+                      <Select
+                        value={draft.text_model}
+                        onValueChange={(v) => setAiCfgDraft({ ...draft, text_model: v })}
+                      >
+                        <SelectTrigger data-testid="ai-text-model">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(aiCfg?.available_text_models || []).map((m) => (
+                            <SelectItem key={m} value={m}>{m}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium block mb-1">
+                        Modelo para imágenes/vídeo
+                      </label>
+                      <Select
+                        value={draft.vision_model}
+                        onValueChange={(v) => setAiCfgDraft({ ...draft, vision_model: v })}
+                      >
+                        <SelectTrigger data-testid="ai-vision-model">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(aiCfg?.available_vision_models || []).map((m) => (
+                            <SelectItem key={m} value={m}>{m}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </Card>
+
+                <Card className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl">
+                  <div className="flex items-start justify-between mb-1">
+                    <div>
+                      <h3 className="font-display text-lg font-semibold flex items-center gap-2">
+                        <Wand2 className="w-5 h-5 text-emerald-700" /> Instrucciones a la IA (System Prompt)
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Describe a la IA QUÉ debe extraer y CÓMO formatearlo.
+                      </p>
+                    </div>
+                    <Button
+                      data-testid="ai-prompt-restore"
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setAiCfgDraft({
+                          ...draft,
+                          system_prompt: aiCfg?.default_system_prompt || draft.system_prompt,
+                        })
+                      }
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 mr-1" /> Default
+                    </Button>
+                  </div>
+                  <Textarea
+                    data-testid="ai-system-prompt"
+                    value={draft.system_prompt}
+                    onChange={(e) => setAiCfgDraft({ ...draft, system_prompt: e.target.value })}
+                    rows={11}
+                    className="font-mono text-xs"
+                    placeholder="Eres un asistente experto…"
+                  />
+                  <div className="mt-2 text-[11px] text-slate-400">
+                    {(draft.system_prompt || "").length} caracteres
+                  </div>
+                </Card>
+
+                <Card className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl">
+                  <h3 className="font-display text-lg font-semibold mb-1">Procesamiento</h3>
+                  <p className="text-xs text-slate-500 mb-4">
+                    Controla la profundidad y velocidad del análisis.
+                  </p>
+                  <div className="grid sm:grid-cols-3 gap-4">
+                    <NumField
+                      testId="ai-max-text-chunks"
+                      label="Trozos por archivo"
+                      hint="Máx. trozos de ~10k caracteres a procesar por PDF/Word"
+                      min={1}
+                      max={20}
+                      value={draft.max_text_chunks}
+                      onChange={(v) => setAiCfgDraft({ ...draft, max_text_chunks: v })}
+                    />
+                    <NumField
+                      testId="ai-max-image-batch"
+                      label="Imágenes por llamada"
+                      hint="Cuántas imágenes/frames se mandan juntos"
+                      min={1}
+                      max={8}
+                      value={draft.max_image_batch}
+                      onChange={(v) => setAiCfgDraft({ ...draft, max_image_batch: v })}
+                    />
+                    <NumField
+                      testId="ai-video-frames"
+                      label="Frames por vídeo"
+                      hint="Cuántos fotogramas se extraen de cada vídeo"
+                      min={2}
+                      max={20}
+                      value={draft.video_frames_count}
+                      onChange={(v) => setAiCfgDraft({ ...draft, video_frames_count: v })}
+                    />
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-4 mt-4">
+                    <div>
+                      <label className="text-xs font-medium block mb-1">Confianza mínima</label>
+                      <Select
+                        value={draft.min_confidence_keep}
+                        onValueChange={(v) => setAiCfgDraft({ ...draft, min_confidence_keep: v })}
+                      >
+                        <SelectTrigger data-testid="ai-min-confidence">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="baja">Baja (guardar todo)</SelectItem>
+                          <SelectItem value="media">Media (recomendado)</SelectItem>
+                          <SelectItem value="alta">Alta (solo signos seguros)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <label className="flex items-center gap-2 mt-5 cursor-pointer text-sm">
+                      <input
+                        data-testid="ai-auto-process"
+                        type="checkbox"
+                        checked={!!draft.auto_process}
+                        onChange={(e) => setAiCfgDraft({ ...draft, auto_process: e.target.checked })}
+                        className="accent-[#002FA7] w-4 h-4"
+                      />
+                      Procesar automáticamente al subir
+                    </label>
+                  </div>
+                </Card>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    data-testid="ai-save"
+                    onClick={saveAiConfig}
+                    disabled={!dirty || aiCfgSaving}
+                    className="btn-ikb"
+                  >
+                    {aiCfgSaving ? (
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 mr-2" />
+                    )}
+                    Guardar configuración
+                  </Button>
+                  <Button
+                    data-testid="ai-test"
+                    onClick={testAiConfig}
+                    disabled={aiCfgTesting}
+                    variant="outline"
+                  >
+                    {aiCfgTesting ? (
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    ) : (
+                      <Sparkles className="w-4 h-4 mr-2" />
+                    )}
+                    Probar configuración
+                  </Button>
+                  <Button
+                    data-testid="ai-reset"
+                    onClick={resetAiConfig}
+                    variant="ghost"
+                    className="text-slate-500"
+                  >
+                    <RotateCcw className="w-4 h-4 mr-2" /> Restaurar por defecto
+                  </Button>
+                </div>
+              </div>
+
+              {/* Sidebar: status + test result */}
+              <aside className="space-y-3">
+                <Card className="p-4 border border-slate-200 dark:border-slate-700 rounded-xl">
+                  <h4 className="font-display font-semibold mb-2">Estado</h4>
+                  <div className="space-y-2 text-xs">
+                    <Row k="Modelo texto" v={aiCfg?.text_model} />
+                    <Row k="Modelo visión" v={aiCfg?.vision_model} />
+                    <Row k="Auto-procesar" v={aiCfg?.auto_process ? "Sí" : "No"} />
+                    <Row
+                      k="Última actualización"
+                      v={aiCfg?.updated_at ? new Date(aiCfg.updated_at).toLocaleString() : "—"}
+                    />
+                  </div>
+                </Card>
+
+                {aiCfgTestResult && (
+                  <Card
+                    data-testid="ai-test-result"
+                    className={`p-4 border rounded-xl ${
+                      aiCfgTestResult.ok
+                        ? "border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-900"
+                        : "border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-900"
+                    }`}
+                  >
+                    <h4 className="font-display font-semibold mb-2 flex items-center gap-2">
+                      {aiCfgTestResult.ok ? (
+                        <>
+                          <CheckCircle2 className="w-4 h-4 text-emerald-700" /> Test exitoso
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="w-4 h-4 text-red-700" /> Test falló
+                        </>
+                      )}
+                    </h4>
+                    {aiCfgTestResult.ok ? (
+                      <>
+                        <p className="text-xs mb-2">
+                          Modelo: <strong>{aiCfgTestResult.model_used}</strong> ·
+                          Signos extraídos: <strong>{aiCfgTestResult.items_extracted}</strong>
+                        </p>
+                        {(aiCfgTestResult.preview || []).map((p, i) => (
+                          <div key={i} className="text-[11px] bg-white/60 dark:bg-slate-900 rounded p-2 mb-1">
+                            <strong>{p.word}</strong> ({p.language}) · {p.confidence}
+                            <div className="text-slate-600 dark:text-slate-400">
+                              Manos: {p.hands?.slice(0, 80)}…
+                            </div>
+                          </div>
+                        ))}
+                      </>
+                    ) : (
+                      <p className="text-xs font-mono break-all">{aiCfgTestResult.error}</p>
+                    )}
+                  </Card>
+                )}
+
+                <Card className="p-4 border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 rounded-xl text-xs">
+                  <p className="text-amber-900 dark:text-amber-200">
+                    <AlertTriangle className="inline w-3 h-3 mr-1" />
+                    Cambiar de modelo afecta a TODAS las próximas extracciones
+                    pero NO re-procesa archivos antiguos. Para que un archivo
+                    use la nueva configuración, vuelve a darle "Re-procesar".
+                  </p>
+                </Card>
+              </aside>
+            </div>
+          )}
+        </TabsContent>
       </Tabs>
     </div>
   );
@@ -1006,6 +1357,31 @@ const InfoTile = ({ icon: Icon, title, value, hint }) => (
     </div>
     <div className="font-display text-2xl font-semibold mt-1">{value}</div>
     <div className="text-xs text-slate-400 mt-0.5">{hint}</div>
+  </div>
+);
+
+const NumField = ({ testId, label, hint, value, min, max, onChange }) => (
+  <div>
+    <label className="text-xs font-medium block mb-1">{label}</label>
+    <Input
+      data-testid={testId}
+      type="number"
+      min={min}
+      max={max}
+      value={value ?? ""}
+      onChange={(e) => onChange(parseInt(e.target.value || "0", 10))}
+      className="font-mono"
+    />
+    <p className="text-[10px] text-slate-400 mt-0.5">{hint}</p>
+  </div>
+);
+
+const Row = ({ k, v }) => (
+  <div className="flex items-center justify-between gap-2">
+    <span className="text-slate-500">{k}</span>
+    <span className="font-mono text-right text-slate-800 dark:text-slate-200 truncate max-w-[60%]" title={v || ""}>
+      {v || "—"}
+    </span>
   </div>
 );
 

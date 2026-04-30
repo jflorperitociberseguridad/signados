@@ -241,6 +241,24 @@ export async function videoForWord(pwd, word, language) {
   });
   return data;
 }
+
+// AI config
+export async function teachingGetAIConfig(pwd) {
+  const { data } = await api.get("/admin/teaching/ai-config", adminH(pwd));
+  return data;
+}
+export async function teachingUpdateAIConfig(pwd, payload) {
+  const { data } = await api.put("/admin/teaching/ai-config", payload, adminH(pwd));
+  return data;
+}
+export async function teachingResetAIConfig(pwd) {
+  const { data } = await api.post("/admin/teaching/ai-config/reset", {}, adminH(pwd));
+  return data;
+}
+export async function teachingTestAIConfig(pwd) {
+  const { data } = await api.post("/admin/teaching/ai-config/test", {}, adminH(pwd));
+  return data;
+}
 export function teachingFileStreamUrl(fileId) {
   // Note: this URL still requires X-Admin-Password header. Use it only as
   // the `src` of an authenticated <video> via the streamWithAuth helper or
