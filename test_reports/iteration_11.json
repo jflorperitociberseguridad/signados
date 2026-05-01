@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 11 full E2E validation for iter11 spec (3 features): (A) Admin password change endpoint + UI modal, (B) Custom OpenAI API key CRUD + encryption at rest, (C) Avatar 3D Michelle GLB animation fix. Backend 10/10 pytest pass on the new /api/admin/change-password and /api/admin/teaching/api-key {GET,PUT,DELETE,test} endpoints. Frontend 7 Enseñanzas tabs confirmed (tab-upload, tab-videos, tab-kb, tab-corrections, tab-train, tab-ai-config, NEW tab-api-key). Change-password modal validation + success toast + modal close + panel continues to work verified. API-key save flow (sk-test-1234567890abc) → custom badge 'Tu clave personal …0abc' + delete button appears; verify returns error-from-LLM (expected for fake key) in api-key-test-result; delete reverts to emergent badge. Avatar 3D Realistic mode: Hola (right arm up), Por favor (both arms up), Bien (thumb up) all animate visibly from rest T-pose and return cleanly — fix confirmed. Stylized mode Hola also animates (no regression). Zero pageerror/console.error across all tested pages. Admin pwd restored to canonical 'signlanguage-admin-2026' at end of test run.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_admin_pwd_apikey.py",
+    "/app/test_reports/pytest/iter11_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py now ~2084 lines — carried over from iter8/9/10. The admin/runtime override section (_get_fernet, _load_admin_runtime_overrides, change-password, api-key CRUD) adds ~140 lines. Strongly recommend extracting admin routes + teaching routes to /app/backend/routers/admin.py and /app/backend/routers/teaching.py before adding more endpoints.",
+    "Fernet key derivation from MONGO_URL+DB_NAME is clever (no extra env var) but the comment acknowledges 'if the DB moves, ciphertexts are invalidated'. In practice this means a MongoDB migration would silently wipe the admin's saved OpenAI key — consider adding a separate FERNET_KEY env var so operators can rotate/migrate without data loss. Minor.",
+    "POST /admin/teaching/api-key/test catches the exception and returns 200 with {ok:false, error:...}. That's fine but the error message is truncated to 300 chars and contains the literal provided key in clear (e.g., 'Incorrect API key provided: sk-test-...0abc'). Consider masking the key in the returned error to avoid leaking the user's own key back into logs/browser devtools. Low severity (they own the key), but good hygiene.",
+    "Frontend change-pwd modal: after a successful change, the password is stored in localStorage via replacePassword — verified. However if the admin has multiple tabs open, the other tabs will continue to send the old password (stale) and get 401s (seen in console during test). Not a bug per se, but consider a 'storage' event listener or BroadcastChannel to sync across tabs.",
+    "Change-password validation: server requires new_password min_length=4 (very lax). Consider enforcing min 8 chars and at least one digit/symbol for an admin password. Not a regression — matches the original ADMIN_PASSWORD env bootstrap. Minor."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter11_admin_pwd_apikey.py"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% — all iter11 spec testids found, save/delete/verify/change-pwd flows work with correct toasts, modal behaviour, badge swapping, avatar animation"},
+  "test_credentials": "Admin: signlanguage-admin-2026 (from /app/memory/test_credentials.md). Restored to canonical value at end of test.",
+  "seed_data_creation": "Test briefly rotated admin pwd to 'tempPwd-iter11-xyz' (backend) and 'testFlowPwd11' (frontend) then restored both to 'signlanguage-admin-2026'. Fake OpenAI key 'sk-test-iter11-...' and 'sk-test-1234567890abc' were stored encrypted and then deleted — no residual state in db.config.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter11 regression file: /app/backend/tests/test_iter11_admin_pwd_apikey.py — run with `export REACT_APP_BACKEND_URL=$(grep REACT_APP_BACKEND_URL /app/frontend/.env | cut -d= -f2) && pytest backend/tests/test_iter11_admin_pwd_apikey.py -v --junitxml=/app/test_reports/pytest/iter11_results.xml`. The tests self-clean (restore pwd, delete fake key). IMPORTANT: backend tests require REACT_APP_BACKEND_URL env var exported explicitly before pytest — /app/frontend/.env is NOT auto-loaded by pytest. New Ensenanzas.jsx testids: teach-change-pwd-btn (header), change-pwd-{current,new,confirm,submit,cancel,modal-backdrop}, tab-api-key, api-key-{input,toggle-visibility,save-btn,verify-btn,delete-btn,test-result,status-custom,status-emergent}. Avatar /avatar realistic mode GLB loads Michelle.glb (hot path is /app/frontend/src/lib/avatarRealistic.js — resolveSetters now falls back to captured rest pose instead of hardcoded Xbot z=1.45, which fixes the T-pose-stuck bug). DO NOT modify avatarRealistic.js axes — they are Michelle-specific. Previous iter10 regression file at /app/backend/tests/test_iter10_ai_config.py also still passes. Public endpoints: GET /api/admin/teaching/api-key returns {has_custom_key, masked_key, active_source in ['custom','emergent_universal','openai_env','none']}.",
+  "verified_flows": [
+    "Backend POST /api/admin/change-password: wrong current → 401, new_password <4 chars → 422, full rotate cycle (change → old rejected → new accepted on gated endpoint → rotate back) → 200 both times",
+    "Backend GET /api/admin/teaching/api-key (no header) → 401; PUT / DELETE (no header) → 401",
+    "Backend initial state after DELETE → has_custom_key=false, masked_key='', active_source=emergent_universal",
+    "Backend PUT invalid prefix 'invalid-nosk-...' → 400",
+    "Backend PUT valid 'sk-test-...1234567890' → 200 {ok:true, has_custom_key:true, masked_key ends …7890}; subsequent GET confirms active_source=custom with matching mask",
+    "Backend DELETE → has_custom_key=false; GET confirms active_source reverted to emergent_universal",
+    "Backend POST /api/admin/teaching/api-key/test → 200 {ok, source in [custom, emergent_universal, openai_env], model_used present}",
+    "Frontend /ensenanzas login (teach-pwd + teach-login) → tabs visible; all 7 tabs enumerated (tab-upload, tab-videos, tab-kb, tab-corrections, tab-train, tab-ai-config, tab-api-key)",
+    "Frontend teach-change-pwd-btn → opens modal; mismatch new/confirm → toast 'Las contraseñas nuevas no coinciden'; correct values → toast 'Contraseña actualizada' + modal closes + teach-stats still visible (panel functional after pwd change)",
+    "Frontend tab-api-key pane: api-key-input, api-key-toggle-visibility, api-key-save-btn, api-key-verify-btn, api-key-status-emergent all visible initially",
+    "Frontend api-key save 'sk-test-1234567890abc' → api-key-status-custom with text 'Tu clave personal …0abc' + api-key-delete-btn appears",
+    "Frontend api-key verify click → api-key-test-result populated (LLM rejects fake key with AuthenticationError — expected and correctly displayed)",
+    "Frontend api-key delete (with confirm) → api-key-status-emergent badge returns",
+    "Avatar /avatar realistic mode: Hola raises right arm (waves), Por favor raises both arms above head, Bien shows thumb-up gesture — all from relaxed rest pose (NOT stuck T-pose); stylized mode Hola also animates",
+    "Zero console.error / pageerror across all pages tested (only transient 401s during password rotation window, which is expected & benign)"
+  ],
+  "rca of the issue": "N/A — no bugs. All 3 iter11 deliverables verified: (1) Avatar fix working (avatarRealistic.js ARM_REST() → {} + rest-pose fallback in resolveSetters successfully drives Michelle.glb); (2) Admin password change endpoint + modal UI fully functional with persistence via db.config['admin_password'] and _CURRENT_ADMIN_PASSWORD module-level mutable; (3) Custom OpenAI key CRUD with Fernet encryption (MONGO_URL+DB_NAME-derived) fully working including auth gate, prefix validation, masking, and source-switching logic."
+}

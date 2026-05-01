@@ -64,6 +64,15 @@ export function AdminAuthProvider({ children }) {
         } catch {}
         setPassword("");
       },
+      // Replace the cached admin password (used after a successful
+      // password rotation in the Enseñanzas panel).
+      replacePassword(newPwd) {
+        try {
+          if (newPwd) localStorage.setItem(KEY, newPwd);
+          else localStorage.removeItem(KEY);
+        } catch {}
+        setPassword(newPwd || "");
+      },
     }),
     [password, verifying],
   );
@@ -73,7 +82,7 @@ export function AdminAuthProvider({ children }) {
 export function useAdminAuth() {
   const v = useContext(ctx);
   if (!v) {
-    return { isAdmin: false, password: "", verifying: false, login: async () => false, logout: () => {} };
+    return { isAdmin: false, password: "", verifying: false, login: async () => false, logout: () => {}, replacePassword: () => {} };
   }
   return v;
 }

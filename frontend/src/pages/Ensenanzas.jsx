@@ -43,6 +43,10 @@ import {
   Settings2,
   Wand2,
   RotateCcw,
+  Key,
+  KeyRound,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAdminAuth } from "../lib/AdminAuthContext";
@@ -65,6 +69,11 @@ import {
   teachingUpdateAIConfig,
   teachingResetAIConfig,
   teachingTestAIConfig,
+  teachingGetApiKey,
+  teachingUpdateApiKey,
+  teachingDeleteApiKey,
+  teachingTestApiKey,
+  adminChangePassword,
 } from "../lib/api";
 
 const STATUS_BADGE = {
@@ -103,7 +112,7 @@ const fmtDate = (iso) => {
 };
 
 export default function Ensenanzas() {
-  const { isAdmin, password, login, verifying } = useAdminAuth();
+  const { isAdmin, password, login, verifying, replacePassword } = useAdminAuth();
   const navigate = useNavigate();
   const [pwdInput, setPwdInput] = useState("");
 
@@ -137,6 +146,20 @@ export default function Ensenanzas() {
   const [aiCfgTesting, setAiCfgTesting] = useState(false);
   const [aiCfgTestResult, setAiCfgTestResult] = useState(null);
 
+  // Custom OpenAI API key (Tab "API IA")
+  const [apiKeyInfo, setApiKeyInfo] = useState(null); // {has_custom_key, masked_key, active_source}
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const [apiKeyShow, setApiKeyShow] = useState(false);
+  const [apiKeyBusy, setApiKeyBusy] = useState(false);
+  const [apiKeyTestResult, setApiKeyTestResult] = useState(null);
+
+  // Change-password modal
+  const [showPwdModal, setShowPwdModal] = useState(false);
+  const [pwdCurrent, setPwdCurrent] = useState("");
+  const [pwdNew, setPwdNew] = useState("");
+  const [pwdConfirm, setPwdConfirm] = useState("");
+  const [pwdBusy, setPwdBusy] = useState(false);
+
   // Global variant
   const { variant, setVariant } = useLanguageVariant();
 
@@ -160,13 +183,14 @@ export default function Ensenanzas() {
     if (!isAdmin) return;
     setFilesLoading(true);
     try {
-      const [f, k, c, s, v, ai] = await Promise.all([
+      const [f, k, c, s, v, ai, akey] = await Promise.all([
         teachingListFiles(password).catch(() => []),
         teachingKnowledge(password, { q: kbQ, language: kbLang, confidence: kbConfidence, limit: 200 }).catch(() => []),
         teachingListCorrections(password).catch(() => []),
         teachingStats(password).catch(() => null),
         teachingVideos(password).catch(() => []),
         teachingGetAIConfig(password).catch(() => null),
+        teachingGetApiKey(password).catch(() => null),
       ]);
       setFiles(f);
       setKb(k);
@@ -177,6 +201,7 @@ export default function Ensenanzas() {
         setAiCfg(ai);
         setAiCfgDraft((d) => d || ai);
       }
+      if (akey) setApiKeyInfo(akey);
     } finally {
       setFilesLoading(false);
     }
@@ -431,6 +456,90 @@ export default function Ensenanzas() {
     }
   };
 
+  // ----- API Key handlers -----
+  const saveApiKey = async () => {
+    if (!apiKeyDraft.trim()) {
+      toast.error("Pega tu clave OpenAI (sk-…)");
+      return;
+    }
+    setApiKeyBusy(true);
+    try {
+      const res = await teachingUpdateApiKey(password, apiKeyDraft.trim());
+      setApiKeyInfo({ has_custom_key: true, masked_key: res.masked_key, active_source: "custom" });
+      setApiKeyDraft("");
+      setApiKeyShow(false);
+      setApiKeyTestResult(null);
+      toast.success("Clave guardada (cifrada en MongoDB)");
+    } catch (e) {
+      toast.error("Error guardando clave", {
+        description: e?.response?.data?.detail || e?.message,
+      });
+    } finally {
+      setApiKeyBusy(false);
+    }
+  };
+
+  const removeApiKey = async () => {
+    if (!window.confirm("¿Eliminar tu clave personal y volver a la clave Emergent universal?")) return;
+    setApiKeyBusy(true);
+    try {
+      await teachingDeleteApiKey(password);
+      setApiKeyInfo({ has_custom_key: false, masked_key: "", active_source: "emergent_universal" });
+      setApiKeyTestResult(null);
+      toast.success("Clave eliminada · usando clave Emergent universal");
+    } catch (e) {
+      toast.error("Error eliminando clave", { description: e?.message });
+    } finally {
+      setApiKeyBusy(false);
+    }
+  };
+
+  const verifyApiKey = async () => {
+    setApiKeyBusy(true);
+    setApiKeyTestResult(null);
+    try {
+      const res = await teachingTestApiKey(password);
+      setApiKeyTestResult(res);
+      if (res.ok) {
+        toast.success(`OK · clave ${res.source === "custom" ? "personal" : "Emergent"}`);
+      } else {
+        toast.error("La clave no responde", { description: res.error });
+      }
+    } catch (e) {
+      toast.error("Error en la verificación", { description: e?.message });
+    } finally {
+      setApiKeyBusy(false);
+    }
+  };
+
+  // ----- Change-password handlers -----
+  const submitChangePassword = async () => {
+    if (pwdNew !== pwdConfirm) {
+      toast.error("Las contraseñas nuevas no coinciden");
+      return;
+    }
+    if (pwdNew.length < 4) {
+      toast.error("Mínimo 4 caracteres");
+      return;
+    }
+    setPwdBusy(true);
+    try {
+      await adminChangePassword(pwdCurrent, pwdNew);
+      replacePassword(pwdNew);
+      setShowPwdModal(false);
+      setPwdCurrent("");
+      setPwdNew("");
+      setPwdConfirm("");
+      toast.success("Contraseña actualizada");
+    } catch (e) {
+      toast.error("No se pudo cambiar", {
+        description: e?.response?.data?.detail || e?.message,
+      });
+    } finally {
+      setPwdBusy(false);
+    }
+  };
+
   const draft = aiCfgDraft || {};
   const dirty = aiCfg && JSON.stringify(aiCfgDraft) !== JSON.stringify(aiCfg);
 
@@ -457,6 +566,14 @@ export default function Ensenanzas() {
           className="rounded-full"
         >
           <RefreshCw className="w-4 h-4 mr-2" /> Actualizar
+        </Button>
+        <Button
+          data-testid="teach-change-pwd-btn"
+          onClick={() => setShowPwdModal(true)}
+          variant="outline"
+          className="rounded-full"
+        >
+          <KeyRound className="w-4 h-4 mr-2" /> Cambiar contraseña
         </Button>
       </div>
 
@@ -534,6 +651,9 @@ export default function Ensenanzas() {
           </TabsTrigger>
           <TabsTrigger value="ai" data-testid="tab-ai-config">
             <Settings2 className="w-4 h-4 mr-1.5" /> Configuración IA
+          </TabsTrigger>
+          <TabsTrigger value="apikey" data-testid="tab-api-key">
+            <Key className="w-4 h-4 mr-1.5" /> API IA
           </TabsTrigger>
         </TabsList>
 
@@ -1334,7 +1454,215 @@ export default function Ensenanzas() {
             </div>
           )}
         </TabsContent>
+
+        {/* ---- TAB 6: API IA (custom OpenAI key) ---- */}
+        <TabsContent value="apikey" className="mt-5" data-testid="tab-content-api-key">
+          <div className="grid lg:grid-cols-3 gap-5">
+            {/* Form */}
+            <div className="lg:col-span-2 space-y-5">
+              <Card className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl">
+                <h3 className="font-display text-lg font-semibold mb-1 flex items-center gap-2">
+                  <Key className="w-5 h-5 text-[#002FA7]" /> Tu clave API de OpenAI
+                </h3>
+                <p className="text-xs text-slate-500 mb-4">
+                  Pega tu propia clave (sk-…) para usarla en lugar de la clave universal de Emergent.
+                  Se cifra antes de guardarse en MongoDB y nunca se devuelve en plano.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="flex-1 relative">
+                    <Input
+                      data-testid="api-key-input"
+                      type={apiKeyShow ? "text" : "password"}
+                      placeholder="sk-proj-…"
+                      value={apiKeyDraft}
+                      onChange={(e) => setApiKeyDraft(e.target.value)}
+                      className="pr-10 font-mono text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setApiKeyShow((s) => !s)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700"
+                      data-testid="api-key-toggle-visibility"
+                      aria-label={apiKeyShow ? "Ocultar clave" : "Mostrar clave"}
+                    >
+                      {apiKeyShow ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <Button
+                    data-testid="api-key-save-btn"
+                    onClick={saveApiKey}
+                    disabled={apiKeyBusy || !apiKeyDraft.trim()}
+                    className="btn-ikb"
+                  >
+                    {apiKeyBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-1.5" />}
+                    Guardar
+                  </Button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-2">
+                  Obtén tu clave en <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="underline">platform.openai.com/api-keys</a>.
+                </p>
+              </Card>
+
+              <Card className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl">
+                <h3 className="font-display text-lg font-semibold mb-3 flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-emerald-600" /> Probar la clave activa
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    data-testid="api-key-verify-btn"
+                    onClick={verifyApiKey}
+                    disabled={apiKeyBusy}
+                    variant="outline"
+                  >
+                    {apiKeyBusy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                    Verificar
+                  </Button>
+                  {apiKeyInfo?.has_custom_key && (
+                    <Button
+                      data-testid="api-key-delete-btn"
+                      onClick={removeApiKey}
+                      disabled={apiKeyBusy}
+                      variant="outline"
+                      className="text-red-600 border-red-200 hover:bg-red-50"
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" /> Eliminar y volver a Emergent
+                    </Button>
+                  )}
+                </div>
+                {apiKeyTestResult && (
+                  <div
+                    data-testid="api-key-test-result"
+                    className={`mt-4 p-3 rounded-lg text-sm border ${
+                      apiKeyTestResult.ok
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                        : "border-red-200 bg-red-50 text-red-700"
+                    }`}
+                  >
+                    {apiKeyTestResult.ok ? (
+                      <>
+                        <CheckCircle2 className="w-4 h-4 inline mr-1" />
+                        Conexión OK · clave <strong>{apiKeyTestResult.source === "custom" ? "personal" : "Emergent universal"}</strong>
+                        {apiKeyTestResult.model_used && <> · modelo {apiKeyTestResult.model_used}</>}
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-4 h-4 inline mr-1" />
+                        Error: {apiKeyTestResult.error}
+                      </>
+                    )}
+                  </div>
+                )}
+              </Card>
+            </div>
+
+            {/* Right rail: status */}
+            <div className="space-y-3">
+              <Card className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl bg-gradient-to-b from-slate-50 to-white dark:from-slate-900 dark:to-slate-900/40">
+                <h4 className="font-display font-semibold mb-3 flex items-center gap-2">
+                  <Database className="w-4 h-4 text-[#002FA7]" /> Estado actual
+                </h4>
+                <div className="space-y-3 text-sm">
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Clave activa</div>
+                    {apiKeyInfo?.has_custom_key ? (
+                      <Badge data-testid="api-key-status-custom" className="bg-[#002FA7] text-white mt-1">
+                        Tu clave personal {apiKeyInfo.masked_key}
+                      </Badge>
+                    ) : (
+                      <Badge data-testid="api-key-status-emergent" className="bg-emerald-600 text-white mt-1">
+                        Clave Emergent (universal)
+                      </Badge>
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Fuente</div>
+                    <div className="text-slate-700 dark:text-slate-200 font-mono text-xs">
+                      {apiKeyInfo?.active_source || "—"}
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-slate-200 dark:border-slate-700 text-[11px] text-slate-500 leading-relaxed">
+                    Cuando tengas tu propia clave, todas las extracciones de
+                    documentos y la generación texto-a-signos usarán esa clave.
+                    Si la eliminas o no la has añadido, se usa la clave
+                    universal incluida con la cuenta Emergent.
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
       </Tabs>
+
+      {/* Change-password modal */}
+      {showPwdModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => !pwdBusy && setShowPwdModal(false)}
+          data-testid="change-pwd-modal-backdrop"
+        >
+          <Card
+            className="w-full max-w-md p-6 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-display text-xl font-semibold flex items-center gap-2 mb-1">
+              <KeyRound className="w-5 h-5 text-[#002FA7]" /> Cambiar contraseña admin
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              La nueva contraseña se guarda en MongoDB y se aplica al instante.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Contraseña actual</label>
+                <Input
+                  type="password"
+                  value={pwdCurrent}
+                  onChange={(e) => setPwdCurrent(e.target.value)}
+                  data-testid="change-pwd-current"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Nueva contraseña</label>
+                <Input
+                  type="password"
+                  value={pwdNew}
+                  onChange={(e) => setPwdNew(e.target.value)}
+                  data-testid="change-pwd-new"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Confirmar nueva</label>
+                <Input
+                  type="password"
+                  value={pwdConfirm}
+                  onChange={(e) => setPwdConfirm(e.target.value)}
+                  data-testid="change-pwd-confirm"
+                  onKeyDown={(e) => e.key === "Enter" && submitChangePassword()}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-5">
+              <Button
+                variant="outline"
+                onClick={() => setShowPwdModal(false)}
+                disabled={pwdBusy}
+                data-testid="change-pwd-cancel"
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={submitChangePassword}
+                disabled={pwdBusy || !pwdCurrent || !pwdNew || !pwdConfirm}
+                className="btn-ikb"
+                data-testid="change-pwd-submit"
+              >
+                {pwdBusy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                Guardar
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

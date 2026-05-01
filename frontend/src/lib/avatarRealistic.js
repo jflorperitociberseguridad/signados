@@ -74,26 +74,18 @@ const MAKE_THUMBS_UP = {
 };
 
 /**
- * Mixamo Xbot bone-rotation conventions (calibrated empirically):
- *  - Both arms hang down at the side when the upper-arm bone has
- *    rotation.z ≈ +1.45 (roughly +π/2), regardless of side.
- *  - Positive arm.z values KEEP the arm at the side; the FOREARM bone is
- *    the one that bends the elbow via rotation.x.
- *  - To raise an arm overhead from idle, decrease arm.z (e.g. -0.1
- *    points it straight up; 0 keeps it horizontal "T-pose").
- *  - rotation.x on the arm bone bends the shoulder forward/back.
- *  - rotation.y on the arm bone twists the upper arm.
+ * The GLB's natural rest pose is the "idle" reference.
+ * Instead of hard-coding arm-down rotation values that depended on a
+ * specific Mixamo Xbot calibration, we now USE THE CAPTURED REST POSE
+ * of whichever GLB is loaded as the implicit default for any bone the
+ * pose does not explicitly drive. Pose definitions only need to specify
+ * the limbs that ACTIVELY change for that gesture.
  *
- *  Pose values below are ABSOLUTE local rotations (radians). They are
- *  applied directly to the bone, not added to the rest pose.
+ * Pose values are ABSOLUTE local rotations (radians). Anything omitted
+ * lerps back toward the captured rest value — meaning the avatar
+ * naturally returns to its bind pose between gestures.
  */
-const ARM_REST = (_side) => ({
-  shoulder: { x: 0, y: 0, z: 0 },
-  arm: { x: 0, y: 0, z: 1.45 }, // arm down at side
-  forearm: { x: -0.1, y: 0, z: 0 },
-  hand: { x: 0, y: 0, z: 0 },
-  fingers: MAKE_OPEN,
-});
+const ARM_REST = () => ({});
 
 const POSES_GLB = {
   idle: {
@@ -386,10 +378,11 @@ function captureRest(bones) {
  * Each setter: { bone, axis, target }
  *
  * Pose values are interpreted as ABSOLUTE local rotations (radians).
- * The rest dictionary is captured but no longer added — making poses
- * device-rig-independent and predictable.
+ * For any axis the pose does not explicitly set, we fall back to the
+ * captured rest value so unused limbs return to bind pose between
+ * gestures (no more stuck-in-T-pose problem).
  */
-function resolveSetters(pose, bones, _rest) {
+function resolveSetters(pose, bones, rest) {
   const setters = [];
   const push = (bone, axis, target) => {
     if (!bone || target == null) return;
@@ -397,26 +390,32 @@ function resolveSetters(pose, bones, _rest) {
   };
 
   const applyArm = (sideKey) => {
-    const armPose = pose[sideKey];
+    const armPose = pose[sideKey] || {};
     const a = bones[sideKey];
+    const r = rest?.[sideKey];
     if (!a) return;
     const partKeys = ["shoulder", "arm", "forearm", "hand"];
     partKeys.forEach((pk) => {
-      const tgt = armPose?.[pk] || {};
+      const tgt = armPose?.[pk];
+      const restPart = r?.[pk];
       ["x", "y", "z"].forEach((ax) => {
-        const v = tgt[ax];
+        // Pose value wins; otherwise return to rest value
+        const v = (tgt && tgt[ax] != null) ? tgt[ax] : restPart?.[ax];
         if (v != null) push(a[pk], ax, v);
       });
     });
     const fingers = armPose?.fingers || {};
     FINGER_KEYS.forEach((fk) => {
       const f = a.fingers[fk];
+      if (!f) return;
       const fp = fingers[fk] || {};
+      const fr = r?.fingers?.[fk] || {};
       ["k", "m", "t"].forEach((seg) => {
         const target = fp[seg] || {};
+        const restSeg = fr?.[seg] || {};
         ["x", "y", "z"].forEach((ax) => {
-          const v = target[ax];
-          if (v != null) push(f[seg], ax, v);
+          const v = (target[ax] != null) ? target[ax] : restSeg?.[ax];
+          if (v != null && f[seg]) push(f[seg], ax, v);
         });
       });
     });
@@ -425,18 +424,17 @@ function resolveSetters(pose, bones, _rest) {
   applyArm("L");
   applyArm("R");
 
-  if (pose.head && bones.head) {
+  // Head and spine: pose value wins, otherwise back to rest
+  ["head", "spine"].forEach((part) => {
+    const bone = bones[part];
+    if (!bone) return;
+    const tgt = pose[part] || {};
+    const restPart = rest?.[part] || {};
     ["x", "y", "z"].forEach((ax) => {
-      const v = pose.head[ax];
-      if (v != null) push(bones.head, ax, v);
+      const v = (tgt[ax] != null) ? tgt[ax] : restPart?.[ax];
+      if (v != null) push(bone, ax, v);
     });
-  }
-  if (pose.spine && bones.spine) {
-    ["x", "y", "z"].forEach((ax) => {
-      const v = pose.spine[ax];
-      if (v != null) push(bones.spine, ax, v);
-    });
-  }
+  });
   return setters;
 }
 

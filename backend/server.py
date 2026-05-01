@@ -43,6 +43,9 @@ from emergentintegrations.payments.stripe.checkout import (
     CheckoutSessionRequest,
 )
 
+from cryptography.fernet import Fernet, InvalidToken
+import hashlib
+
 import email_service  # type: ignore  # noqa: E402
 import teaching_service  # type: ignore  # noqa: E402
 from rtc_signaling import (  # type: ignore  # noqa: E402
@@ -87,6 +90,22 @@ ALLOWED_HOSTS = [h.strip() for h in _env("ALLOWED_HOSTS", "*").split(",") if h.s
 CORS_ORIGINS = [o.strip() for o in _env("CORS_ORIGINS", "*").split(",") if o.strip()]
 STRIPE_API_KEY = _env("STRIPE_API_KEY")
 ADMIN_PASSWORD = _env("ADMIN_PASSWORD") or "change-me"
+
+# Mutable runtime override for the admin password — loaded from
+# `db.config["admin_password"]` at startup if a previous admin changed it
+# via the UI; otherwise falls back to the ADMIN_PASSWORD env var.
+_CURRENT_ADMIN_PASSWORD = ADMIN_PASSWORD
+
+# Mutable runtime override for the OpenAI API key used by the Enseñanzas
+# extraction flow. When `db.config["openai_api_key"]` is set, the admin's
+# personal OpenAI sk-… key is used instead of the Emergent universal key.
+_CUSTOM_OPENAI_API_KEY: Optional[str] = None
+
+# Fernet encryption key for storing the admin's OpenAI key at rest.
+# Derived deterministically from MONGO_URL+DB_NAME so it survives restarts
+# without needing an extra env var, and rotates automatically if the DB
+# moves (which would invalidate any stale ciphertext anyway).
+_FERNET_KEY: Optional[bytes] = None
 
 # Fixed pricing packages — defined SERVER-SIDE (never trust client amounts)
 PRICING_PACKAGES = {
@@ -212,8 +231,11 @@ Devuelve SOLO JSON válido cuando se solicite (sin markdown, sin texto extra).
 
 
 def _llm_chat(system: str, model: Optional[str] = None, session: Optional[str] = None) -> LlmChat:
+    # Use the admin-supplied OpenAI key when available (set via the
+    # Enseñanzas → API IA tab); otherwise fall back to the universal key.
+    api_key = _CUSTOM_OPENAI_API_KEY or LLM_API_KEY
     return LlmChat(
-        api_key=LLM_API_KEY,
+        api_key=api_key,
         session_id=session or f"sl-{uuid.uuid4()}",
         system_message=system,
     ).with_model(LLM_PROVIDER, model or LLM_VISION_MODEL)
@@ -406,6 +428,7 @@ api_router = APIRouter(prefix="/api")
 @app.on_event("startup")
 async def _startup():
     await ensure_indexes()
+    await _load_admin_runtime_overrides()
 
 
 @app.on_event("shutdown")
@@ -1055,7 +1078,7 @@ class ApiKeyCreate(BaseModel):
 
 
 def _verify_admin(password: str):
-    if not ADMIN_PASSWORD or password != ADMIN_PASSWORD:
+    if not _CURRENT_ADMIN_PASSWORD or password != _CURRENT_ADMIN_PASSWORD:
         raise HTTPException(status_code=401, detail="Invalid admin password")
 
 
@@ -1367,6 +1390,145 @@ async def kb_augmented_hints(text: str, language: Optional[str] = None) -> List[
 def _verify_admin_either(request: Request, x_admin_password: str = "") -> None:
     pwd = x_admin_password or request.headers.get("X-Admin-Password", "")
     _verify_admin(pwd)
+
+
+# ---------------------------------------------------------------------------
+# Admin runtime overrides: password + custom OpenAI key
+# ---------------------------------------------------------------------------
+def _get_fernet() -> Fernet:
+    """Lazy-init Fernet for the encrypted custom OpenAI key. Derives a 32-byte
+    key from MONGO_URL+DB_NAME so it survives restarts without an extra env
+    var. If the DB moves, ciphertexts are invalidated (acceptable: the admin
+    can simply re-paste their key)."""
+    global _FERNET_KEY
+    if _FERNET_KEY is None:
+        seed = (MONGO_URL + "::" + DB_NAME + "::ai-key-v1").encode("utf-8")
+        digest = hashlib.sha256(seed).digest()
+        _FERNET_KEY = base64.urlsafe_b64encode(digest)
+    return Fernet(_FERNET_KEY)
+
+
+async def _load_admin_runtime_overrides():
+    """Load admin password + custom OpenAI key from DB on startup."""
+    global _CURRENT_ADMIN_PASSWORD, _CUSTOM_OPENAI_API_KEY
+    try:
+        pwd_doc = await db.config.find_one({"_id": "admin_password"})
+        if pwd_doc and pwd_doc.get("password"):
+            _CURRENT_ADMIN_PASSWORD = pwd_doc["password"]
+    except Exception as exc:
+        logger.warning("Could not load admin_password override: %s", exc)
+    try:
+        key_doc = await db.config.find_one({"_id": "openai_api_key"})
+        if key_doc and key_doc.get("ciphertext"):
+            try:
+                plain = _get_fernet().decrypt(key_doc["ciphertext"].encode("utf-8")).decode("utf-8")
+                _CUSTOM_OPENAI_API_KEY = plain
+            except InvalidToken:
+                logger.warning("Stored OpenAI key ciphertext invalid (mongo moved?). Ignoring.")
+    except Exception as exc:
+        logger.warning("Could not load openai_api_key override: %s", exc)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=4, max_length=120)
+
+
+@api_router.post("/admin/change-password")
+@limiter.limit("5/minute")
+async def admin_change_password(request: Request, payload: ChangePasswordRequest):
+    """Allow an authenticated admin to rotate the admin password. Persists in
+    MongoDB so it survives restarts. The ENV ADMIN_PASSWORD is used as the
+    initial bootstrap value only."""
+    global _CURRENT_ADMIN_PASSWORD
+    _verify_admin(payload.current_password)
+    await db.config.update_one(
+        {"_id": "admin_password"},
+        {"$set": {
+            "password": payload.new_password,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+        upsert=True,
+    )
+    _CURRENT_ADMIN_PASSWORD = payload.new_password
+    return {"ok": True}
+
+
+# ---- Custom OpenAI API key (Enseñanzas → tab "API IA") ----
+class ApiKeyUpdate(BaseModel):
+    api_key: str = Field(min_length=10, max_length=200)
+
+
+def _mask_key(key: str) -> str:
+    if not key:
+        return ""
+    return f"…{key[-4:]}" if len(key) >= 4 else "…"
+
+
+@api_router.get("/admin/teaching/api-key")
+async def teaching_get_api_key(request: Request):
+    """Return the masked custom OpenAI key + which key is active."""
+    _verify_admin_either(request)
+    has_custom = bool(_CUSTOM_OPENAI_API_KEY)
+    return {
+        "has_custom_key": has_custom,
+        "masked_key": _mask_key(_CUSTOM_OPENAI_API_KEY) if has_custom else "",
+        "active_source": "custom" if has_custom else ("emergent_universal" if EMERGENT_LLM_KEY else ("openai_env" if OPENAI_API_KEY else "none")),
+    }
+
+
+@api_router.put("/admin/teaching/api-key")
+async def teaching_update_api_key(request: Request, payload: ApiKeyUpdate):
+    """Encrypt + store the admin's personal OpenAI key in DB."""
+    global _CUSTOM_OPENAI_API_KEY
+    _verify_admin_either(request)
+    new_key = payload.api_key.strip()
+    if not new_key.startswith("sk-"):
+        raise HTTPException(400, "El formato de la clave parece inválido (debe comenzar con sk-)")
+    ciphertext = _get_fernet().encrypt(new_key.encode("utf-8")).decode("utf-8")
+    await db.config.update_one(
+        {"_id": "openai_api_key"},
+        {"$set": {
+            "ciphertext": ciphertext,
+            "last_4": new_key[-4:],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+        upsert=True,
+    )
+    _CUSTOM_OPENAI_API_KEY = new_key
+    return {"ok": True, "has_custom_key": True, "masked_key": _mask_key(new_key)}
+
+
+@api_router.delete("/admin/teaching/api-key")
+async def teaching_delete_api_key(request: Request):
+    """Remove the custom key — extraction reverts to Emergent universal key."""
+    global _CUSTOM_OPENAI_API_KEY
+    _verify_admin_either(request)
+    await db.config.delete_one({"_id": "openai_api_key"})
+    _CUSTOM_OPENAI_API_KEY = None
+    return {"ok": True, "has_custom_key": False}
+
+
+@api_router.post("/admin/teaching/api-key/test")
+@limiter.limit("10/minute")
+async def teaching_test_api_key(request: Request):
+    """Quick smoke test of the currently-active OpenAI key (custom or fallback).
+    Returns the source used + ok status."""
+    _verify_admin_either(request)
+    cfg = await get_ai_config()
+    source = "custom" if _CUSTOM_OPENAI_API_KEY else ("emergent_universal" if EMERGENT_LLM_KEY else "openai_env")
+    try:
+        chat = _llm_chat("Eres un asistente. Responde solo 'ok'.", model=cfg.get("text_model") or "gpt-4o-mini")
+        resp = await chat.send_message(UserMessage(text="ping"))
+        return {
+            "ok": True,
+            "source": source,
+            "model_used": cfg.get("text_model"),
+            "response_preview": (str(resp) or "")[:120],
+        }
+    except Exception as exc:
+        return {"ok": False, "source": source, "error": str(exc)[:300]}
+
 
 
 # ---- Models ----

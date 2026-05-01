@@ -119,6 +119,13 @@ export async function adminLogin(password) {
   const { data } = await api.post("/admin/login", { password });
   return data;
 }
+export async function adminChangePassword(currentPassword, newPassword) {
+  const { data } = await api.post(
+    "/admin/change-password",
+    { current_password: currentPassword, new_password: newPassword },
+  );
+  return data;
+}
 export async function adminListKeys(password) {
   const { data } = await api.get("/admin/api-keys", {
     headers: { "X-Admin-Password": password },
@@ -257,6 +264,24 @@ export async function teachingResetAIConfig(pwd) {
 }
 export async function teachingTestAIConfig(pwd) {
   const { data } = await api.post("/admin/teaching/ai-config/test", {}, adminH(pwd));
+  return data;
+}
+
+// Custom OpenAI API key (Enseñanzas → tab "API IA")
+export async function teachingGetApiKey(pwd) {
+  const { data } = await api.get("/admin/teaching/api-key", adminH(pwd));
+  return data;
+}
+export async function teachingUpdateApiKey(pwd, apiKey) {
+  const { data } = await api.put("/admin/teaching/api-key", { api_key: apiKey }, adminH(pwd));
+  return data;
+}
+export async function teachingDeleteApiKey(pwd) {
+  const { data } = await api.delete("/admin/teaching/api-key", adminH(pwd));
+  return data;
+}
+export async function teachingTestApiKey(pwd) {
+  const { data } = await api.post("/admin/teaching/api-key/test", {}, adminH(pwd));
   return data;
 }
 export function teachingFileStreamUrl(fileId) {
