@@ -34,24 +34,38 @@ import { useLanguageVariant } from "../lib/LanguageVariantContext";
  * This avoids the WebGL context-limit error ("Error creating WebGL context").
  */
 /**
- * GLOBAL_THREE — module-level singleton holding the WebGL renderer, scene,
- * camera, lights, floor and orbit state. Created lazily ONCE on the first
- * mount of AvatarSign and reused for the entire page lifetime.
+ * GLOBAL_THREE — process-wide singleton holding the WebGL renderer + scene.
  *
- * Why a module-level singleton instead of a per-mount WeakMap?
- *   Browsers cap the number of live WebGL contexts per page (~16). When the
- *   user navigates away and back to /avatar, React mounts a fresh DOM div,
- *   so a div-keyed WeakMap can't help — we'd build a brand-new context every
- *   visit and quickly hit the cap → "Error creating WebGL context".
- *   By keeping a single context attached to whichever <div> is currently
- *   mounted, we never create more than one context, no matter how many times
- *   the user navigates to /avatar.
+ * Stored on `window.__signLangThreeSingleton` so it survives:
+ *   - React.StrictMode double-mount
+ *   - Route navigation between /avatar and other pages
+ *   - Webpack HMR module reloads in dev (which would otherwise leak the
+ *     OLD module's WebGL context — and after several edits, exhaust the
+ *     ~16 contexts/page browser cap → "Error creating WebGL context")
+ *
+ * On any creation failure we attempt to recover by force-releasing the
+ * previous canvas's context and retrying once.
  */
-let GLOBAL_THREE = null;
+const GLOBAL_KEY = "__signLangThreeSingleton";
 
-function getOrCreateGlobalThree() {
-  if (GLOBAL_THREE) return GLOBAL_THREE;
+function disposeOldSingleton() {
+  const old = (typeof window !== "undefined" && window[GLOBAL_KEY]) || null;
+  if (!old) return;
+  try { old.animActive = false; } catch (_) { /* no-op */ }
+  try { cancelAnimationFrame(old.animFrameId); } catch (_) { /* no-op */ }
+  try { old.renderer?.forceContextLoss?.(); } catch (_) { /* no-op */ }
+  try { old.renderer?.dispose?.(); } catch (_) { /* no-op */ }
+  try {
+    if (old.renderer?.domElement?.parentNode) {
+      old.renderer.domElement.parentNode.removeChild(old.renderer.domElement);
+    }
+  } catch (_) { /* no-op */ }
+  if (typeof window !== "undefined") {
+    try { delete window[GLOBAL_KEY]; } catch (_) { window[GLOBAL_KEY] = null; }
+  }
+}
 
+function buildThreeSingleton() {
   const scene = new THREE.Scene();
 
   // Soft vertical-gradient background
@@ -128,7 +142,7 @@ function getOrCreateGlobalThree() {
   ao.position.y = 0.001;
   scene.add(ao);
 
-  GLOBAL_THREE = {
+  return {
     scene,
     cam,
     renderer,
@@ -136,11 +150,42 @@ function getOrCreateGlobalThree() {
     clock: new THREE.Clock(),
     animActive: false,
     animFrameId: null,
-    // Per-mount step callback supplied by AvatarSign; allows the singleton's
-    // tick() to drive whichever avatar instances the active component owns.
     stepCallback: null,
   };
-  return GLOBAL_THREE;
+}
+
+function getOrCreateGlobalThree() {
+  if (typeof window === "undefined") return null;
+  // Reuse if already alive
+  const existing = window[GLOBAL_KEY];
+  if (existing && existing.renderer && !existing.renderer.getContext()?.isContextLost?.()) {
+    return existing;
+  }
+  // Stale or missing → release the old one (if any) before allocating again
+  if (existing) disposeOldSingleton();
+  try {
+    const created = buildThreeSingleton();
+    window[GLOBAL_KEY] = created;
+    return created;
+  } catch (err) {
+    // First attempt failed → assume context exhaustion. Aggressively release
+    // any zombie context still attached to the body/document and retry once.
+    try {
+      const canvases = document.querySelectorAll("canvas");
+      canvases.forEach((c) => {
+        const gl = c.getContext("webgl2") || c.getContext("webgl");
+        try { gl?.getExtension("WEBGL_lose_context")?.loseContext(); } catch (_) { /* ignore */ }
+      });
+    } catch (_) { /* ignore */ }
+    try {
+      const created = buildThreeSingleton();
+      window[GLOBAL_KEY] = created;
+      return created;
+    } catch (err2) {
+      // Bubble up; the component shows a friendly fallback message
+      throw err2;
+    }
+  }
 }
 
 const SHORTCUTS = [
@@ -194,7 +239,19 @@ export default function AvatarSign() {
     const mount = mountRef.current;
     if (!mount) return;
 
-    const G = getOrCreateGlobalThree();
+    let G;
+    try {
+      G = getOrCreateGlobalThree();
+    } catch (err) {
+      // WebGL truly unavailable (no GPU / contexts exhausted at OS level).
+      // Show a friendly message instead of crashing the whole route.
+      // eslint-disable-next-line no-console
+      console.error("[AvatarSign] Could not init WebGL:", err);
+      setLoadError("Tu navegador no permite WebGL. Recarga la página o usa otro navegador (Chrome/Edge/Firefox actualizado).");
+      setLoadingModel(false);
+      return;
+    }
+    if (!G) return;
     sceneRef.current = G.scene;
     rendererRef.current = G.renderer;
     camRef.current = G.cam;
