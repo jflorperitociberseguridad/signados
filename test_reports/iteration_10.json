@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 10 full E2E validation (backend + frontend). Focus: NEW /api/admin/teaching/ai-config {GET,PUT,reset,test} endpoints + the restored 'Configuración IA' (tab-ai-config) panel in /ensenanzas. Backend: 20/20 pytest pass. Frontend: home + footer link 'Enseñanzas' + admin gate + all 6 teaching tabs + ai-config save flow with toast + t2s + avatar dual-mode + diccionario all clean. Zero console errors. Admin pwd persists. ai-config test endpoint calls real LLM and returns ok=true with items_extracted>=0.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter10_ai_config.py",
+    "/app/test_reports/pytest/iter10_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py keeps growing (~1922 lines). The teaching/* router (files, videos, stats, knowledge, corrections, ai-config) is now ~600 lines inside server.py — strongly recommend extracting to /app/backend/routers/teaching.py and /app/backend/routers/rtc.py. Same comment carried from iter8/9 — still unresolved.",
+    "POST /api/admin/teaching/ai-config/test hits the real LLM with a 60s timeout. It is rate-limited at 10/min which is good, but there is no sanitization of the returned `preview` field — if the LLM ever returns very large items, the JSON response could grow unbounded. Recommend .slice(0, 2) already happens for items but each item could still be large; consider trimming to ~1KB per field.",
+    "AIConfigUpdate PUT validation: min_confidence_keep is accepted as-is without range check. Consider validating it's one of {'alta','media','baja'} server-side, else invalid values persist until the reset endpoint is hit.",
+    "ai-config POST /test response shape uses {ok: bool, error: str} on failure vs {ok, model_used, items_extracted, preview} on success — inconsistent. Suggest always returning all keys (null on failure) so the frontend can render a stable table.",
+    "Frontend /ensenanzas 'Configuración IA' tab: system-prompt textarea has no max-length or character counter enforced client-side beyond the 999-char display — rely on server-side only. Minor."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter10_ai_config.py"],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% — all spec testids found, save-flow toast visible, persistence verified against server"},
+  "test_credentials": "Admin: signlanguage-admin-2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "No persistent seed created. Test modified ai_config text_model/system_prompt but called /reset at end of frontend flow — server back to defaults after tests.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter10 regression file: /app/backend/tests/test_iter10_ai_config.py — run with `pytest backend/tests/test_iter10_ai_config.py -v --junitxml=/app/test_reports/pytest/iter10_results.xml`. Covers: public smoke (/, dictionary, history, text-to-sign), admin gate on files/videos/stats/knowledge, AI config full lifecycle (GET/PUT/reset/test + auth gate + invalid-model 400), RTC POST /rtc/room + GET /rtc/stats. NEW frontend testids on /ensenanzas ai-config tab: data-testid='tab-ai-config' (TabsTrigger). Inside the pane: <textarea> for system prompt (no testid, use .first), buttons 'Guardar configuración' / 'Probar configuración' / 'Restaurar por defecto' (no testids — use get_by_role(button, name=...)). The RIGHT-rail 'Estado' card shows: Modelo texto, Modelo visión, Auto-procesar, Última actualización. Save toast text: 'Configuración guardada'. System prompt persists across reload and can be verified via GET /api/admin/teaching/ai-config with X-Admin-Password header. The /test endpoint uses real LLM (~3-5s) — rate limited 10/min. /api/rtc/room is POST not GET (changed from iter7 spec). WebSocket path is /api/rtc/{room_id} (NOT /api/rtc/ws/{room}).",
+  "verified_flows": [
+    "Backend: /, /dictionary, /history, /translate/text-to-sign, admin gate on files+videos+stats+knowledge (401 w/o pwd, 200 w/ pwd)",
+    "Backend ai-config GET: all 11 expected keys present (text_model, vision_model, system_prompt, available_text_models, available_vision_models, default_system_prompt, max_text_chunks, max_image_batch, video_frames_count, min_confidence_keep, auto_process)",
+    "Backend ai-config PUT: {text_model:'gpt-4o-mini'} persists (confirmed via re-GET); invalid model returns 400; no auth returns 401",
+    "Backend ai-config RESET: restores defaults; requires admin",
+    "Backend ai-config TEST: returns ok=true with model_used+items_extracted (real LLM call succeeded); requires admin",
+    "Backend /rtc/room POST: returns {room, expires_in_minutes}",
+    "Frontend home /: title set, header shows Inicio/Traductor/Práctica/En vivo/PRO/Avatar 3D/Llamada/Conversa/Más, footer shows 'Enseñanzas' link (count=1), header does NOT show 'Enseñanzas' (count=0) — spec compliant",
+    "Frontend /ensenanzas: login gate (teach-pwd + teach-login) works; after login all 6 tabs present: tab-upload, tab-videos, tab-kb, tab-corrections, tab-train, tab-ai-config",
+    "Frontend ai-config tab: Modelos dropdowns (gpt-4o-mini, gpt-4o), system-prompt textarea (980 chars default), Estado panel (Modelo texto/visión/Auto-procesar/Última actualización), buttons Guardar/Probar/Restaurar all visible",
+    "Frontend ai-config save flow: editing textarea + click Guardar shows 'Configuración guardada' toast; server GET confirms last 40 chars of system_prompt match the edit; Última actualización timestamp updated to current date",
+    "Frontend /texto-a-signos: input 'hola gracias' + click 'Generar guía' renders 2-step guide (01 hola / 02 gracias) with Manos/Boca/Expresión/Postura + '2 hints de KB' + 'Confianza: alta' + 'LSE' badges",
+    "Frontend /avatar: avatar-canvas, avatar-mode-selector, avatar-mode-realistic, avatar-mode-stylized all present; toggle realistic↔stylized works with no console errors",
+    "Frontend /diccionario: page renders with 10k chars of content, no errors",
+    "No pageerror / console.error across any page tested"
+  ],
+  "rca of the issue": "N/A — no bugs. Main agent's fix (adding the missing TabsTrigger with data-testid='tab-ai-config' + importing teachingGetAIConfig/Update/Reset/Test in Ensenanzas.jsx) is confirmed working end-to-end: tab is visible, pane loads config from backend, edits save with toast, persistence verified, reset endpoint restores defaults."
+}
