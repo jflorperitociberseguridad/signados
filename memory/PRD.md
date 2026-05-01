@@ -141,6 +141,32 @@
 - UI: modelos (gpt-4o, gpt-4o-mini, claude-sonnet-4-5, gemini-2.5-pro/flash), system prompt editable, sliders para chunks/batch/frames/min_confidence, switch auto-procesar, banner con dirty-state, botones Guardar / Probar / Restaurar default
 - `teaching_service` ahora carga `ai_config` desde DB y respeta sus parámetros en cada extracción
 
+### Phase 2 — Block I (May 2026) — Avatar fix + admin password rotation + clave OpenAI personal
+
+#### Bug fix: avatar 3D animaba en T-pose
+- **Causa raíz**: `avatarRealistic.js` tenía valores `arm.z = ±1.45` calibrados para Xbot.glb, pero el GLB activo es Michelle.glb cuyos ejes locales en LeftArm/RightArm difieren. Las rotaciones se aplicaban pero no traían los brazos abajo.
+- **Fix**: refactor de `resolveSetters` para usar la **rest pose capturada del GLB** como fallback cuando una pose no especifica un eje. `ARM_REST()` ahora retorna `{}`. Idle = bind pose natural; cualquier pose modifica solo lo que necesita y los demás bones vuelven a rest.
+- Verificado: Hola levanta brazo derecho, Por favor ambos brazos arriba, Bien thumbs-up, transiciones limpias.
+
+#### Botón "Cambiar contraseña" en panel /ensenanzas
+- Header del panel ahora incluye `teach-change-pwd-btn` que abre un modal con 3 inputs (current/new/confirm).
+- Backend `POST /api/admin/change-password` valida current contra `_CURRENT_ADMIN_PASSWORD` (módulo-level mutable), guarda la nueva en `db.config['admin_password']` y actualiza la variable.
+- Al arrancar el backend (`_load_admin_runtime_overrides`) carga el override desde DB. El env `ADMIN_PASSWORD` queda como bootstrap inicial.
+- `replacePassword` añadido a `AdminAuthContext` para sincronizar localStorage tras un cambio exitoso.
+
+#### Tab "API IA" para clave OpenAI personal
+- Séptimo tab `tab-api-key` en /ensenanzas con UI completa:
+  - Input cifrado (`type=password`) con toggle visibility, botón Guardar
+  - Estado lateral: badge "Tu clave personal …XXXX" o "Clave Emergent (universal)"
+  - Botones Verificar (test endpoint) y Eliminar
+- Backend nuevos endpoints:
+  - `GET /api/admin/teaching/api-key` → `{has_custom_key, masked_key:'…XXXX', active_source}`
+  - `PUT /api/admin/teaching/api-key` body `{api_key:'sk-…'}` → cifra con Fernet (clave derivada de MONGO_URL+DB_NAME por SHA-256), guarda en `db.config['openai_api_key']`
+  - `DELETE /api/admin/teaching/api-key` → vuelve a clave universal
+  - `POST /api/admin/teaching/api-key/test` → ping al LLM con la clave activa
+- `_llm_chat()` modificado: usa `_CUSTOM_OPENAI_API_KEY` cuando existe, si no `LLM_API_KEY` (Emergent universal o env OPENAI_API_KEY).
+- La clave personal afecta toda la app (extracción de docs, texto-a-signos, traducción de vídeo, etc.).
+
 ## Backlog (P1)
 - TURN server config (currently STUN-only — production guidance in DEPLOY.md)
 - Multi-replica WebRTC signaling (Redis Pub/Sub)
