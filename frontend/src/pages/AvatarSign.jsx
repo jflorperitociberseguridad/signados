@@ -33,7 +33,115 @@ import { useLanguageVariant } from "../lib/LanguageVariantContext";
  *
  * This avoids the WebGL context-limit error ("Error creating WebGL context").
  */
-const SCENE_REGISTRY = new WeakMap();
+/**
+ * GLOBAL_THREE — module-level singleton holding the WebGL renderer, scene,
+ * camera, lights, floor and orbit state. Created lazily ONCE on the first
+ * mount of AvatarSign and reused for the entire page lifetime.
+ *
+ * Why a module-level singleton instead of a per-mount WeakMap?
+ *   Browsers cap the number of live WebGL contexts per page (~16). When the
+ *   user navigates away and back to /avatar, React mounts a fresh DOM div,
+ *   so a div-keyed WeakMap can't help — we'd build a brand-new context every
+ *   visit and quickly hit the cap → "Error creating WebGL context".
+ *   By keeping a single context attached to whichever <div> is currently
+ *   mounted, we never create more than one context, no matter how many times
+ *   the user navigates to /avatar.
+ */
+let GLOBAL_THREE = null;
+
+function getOrCreateGlobalThree() {
+  if (GLOBAL_THREE) return GLOBAL_THREE;
+
+  const scene = new THREE.Scene();
+
+  // Soft vertical-gradient background
+  const canvas = document.createElement("canvas");
+  canvas.width = 16;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  const grad = ctx.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, "#1e293b");
+  grad.addColorStop(0.6, "#475569");
+  grad.addColorStop(1, "#cbd5e1");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 16, 256);
+  const bgTex = new THREE.CanvasTexture(canvas);
+  bgTex.colorSpace = THREE.SRGBColorSpace;
+  scene.background = bgTex;
+
+  const cam = new THREE.PerspectiveCamera(34, 16 / 9, 0.1, 100);
+  cam.position.set(0, 1.65, 3.4);
+  cam.lookAt(0, 1.55, 0);
+
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: false,
+    powerPreference: "default",
+    failIfMajorPerformanceCaveat: false,
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+  const keyL = new THREE.DirectionalLight(0xffffff, 1.4);
+  keyL.position.set(2.5, 4.2, 2.5);
+  keyL.castShadow = true;
+  keyL.shadow.mapSize.set(1024, 1024);
+  keyL.shadow.camera.near = 0.5;
+  keyL.shadow.camera.far = 12;
+  keyL.shadow.camera.left = -3;
+  keyL.shadow.camera.right = 3;
+  keyL.shadow.camera.top = 4;
+  keyL.shadow.camera.bottom = -1;
+  keyL.shadow.bias = -0.0005;
+  keyL.shadow.radius = 4;
+  scene.add(keyL);
+
+  const fill = new THREE.DirectionalLight(0x88a8ff, 0.55);
+  fill.position.set(-3, 2, 1.5);
+  scene.add(fill);
+
+  const rim = new THREE.SpotLight(0xffe6c9, 1.6, 12, Math.PI / 6, 0.4, 1);
+  rim.position.set(-1.5, 3.5, -3);
+  rim.target.position.set(0, 1.5, 0);
+  scene.add(rim, rim.target);
+
+  scene.add(new THREE.HemisphereLight(0xeaf2ff, 0x453525, 0.35));
+
+  const floor = new THREE.Mesh(
+    new THREE.CircleGeometry(3.4, 64),
+    new THREE.MeshStandardMaterial({ color: 0x9aa6b8, roughness: 0.9, metalness: 0.0 }),
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  const ao = new THREE.Mesh(
+    new THREE.RingGeometry(0.05, 1.2, 64),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }),
+  );
+  ao.rotation.x = -Math.PI / 2;
+  ao.position.y = 0.001;
+  scene.add(ao);
+
+  GLOBAL_THREE = {
+    scene,
+    cam,
+    renderer,
+    orbit: { azim: 0, polar: 1.45, dist: 3.4, dragging: false, lastX: 0, lastY: 0 },
+    clock: new THREE.Clock(),
+    animActive: false,
+    animFrameId: null,
+    // Per-mount step callback supplied by AvatarSign; allows the singleton's
+    // tick() to drive whichever avatar instances the active component owns.
+    stepCallback: null,
+  };
+  return GLOBAL_THREE;
+}
 
 const SHORTCUTS = [
   "Hola", "Adiós", "Sí", "No", "Por favor", "Gracias",
@@ -49,7 +157,6 @@ export default function AvatarSign() {
   const sceneRef = useRef(null);
   const rendererRef = useRef(null);
   const camRef = useRef(null);
-  const animFrameRef = useRef(null);
 
   const stylizedAnimRef = useRef(null);
   const realisticRef = useRef(null);
@@ -82,149 +189,52 @@ export default function AvatarSign() {
   const [refVideoLoading, setRefVideoLoading] = useState(false);
   const refBlobRef = useRef(null);
 
-  // ----- Initialize Three.js scene -----
+  // ----- Attach the global Three.js singleton to the current mount -----
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
 
-    // ── StrictMode + WebGL safe-init ──
-    // If the previous mount scheduled a disposal, cancel it and reuse.
-    const cached = SCENE_REGISTRY.get(mount);
-    if (cached) {
-      if (cached.disposeTimer) {
-        clearTimeout(cached.disposeTimer);
-        cached.disposeTimer = null;
-      }
-      // Reuse existing scene/renderer/camera and rebind animation refs
-      sceneRef.current = cached.scene;
-      rendererRef.current = cached.renderer;
-      camRef.current = cached.cam;
-      orbitRef.current = cached.orbit;
-      // Resume the animation loop (we paused it in cleanup)
-      cached.resume?.();
-      return () => {
-        // On the next cleanup, schedule actual disposal (cancellable)
-        cached.disposeTimer = setTimeout(() => cached.dispose?.(), 80);
-      };
-    }
+    const G = getOrCreateGlobalThree();
+    sceneRef.current = G.scene;
+    rendererRef.current = G.renderer;
+    camRef.current = G.cam;
+    orbitRef.current = G.orbit;
 
-    // First-ever mount: build the scene from scratch.
+    // Move (or first-attach) the renderer canvas to this mount
+    if (G.renderer.domElement.parentNode !== mount) {
+      mount.appendChild(G.renderer.domElement);
+    }
     const w = mount.clientWidth || 640;
     const h = mount.clientHeight || 480;
+    G.renderer.setSize(w, h);
+    G.cam.aspect = w / h;
+    G.cam.updateProjectionMatrix();
 
-    const scene = new THREE.Scene();
-    sceneRef.current = scene;
-
-    // Soft vertical-gradient background
-    const canvas = document.createElement("canvas");
-    canvas.width = 16;
-    canvas.height = 256;
-    const ctx = canvas.getContext("2d");
-    const grad = ctx.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, "#1e293b");
-    grad.addColorStop(0.6, "#475569");
-    grad.addColorStop(1, "#cbd5e1");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 16, 256);
-    const bgTex = new THREE.CanvasTexture(canvas);
-    bgTex.colorSpace = THREE.SRGBColorSpace;
-    scene.background = bgTex;
-
-    const cam = new THREE.PerspectiveCamera(34, w / h, 0.1, 100);
-    cam.position.set(0, 1.65, 3.4);
-    cam.lookAt(0, 1.55, 0);
-    camRef.current = cam;
-
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: false,
-      powerPreference: "default",
-      failIfMajorPerformanceCaveat: false,
-    });
-    renderer.setSize(w, h);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    mount.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
-
-    scene.add(new THREE.AmbientLight(0xffffff, 0.35));
-
-    const key = new THREE.DirectionalLight(0xffffff, 1.4);
-    key.position.set(2.5, 4.2, 2.5);
-    key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
-    key.shadow.camera.near = 0.5;
-    key.shadow.camera.far = 12;
-    key.shadow.camera.left = -3;
-    key.shadow.camera.right = 3;
-    key.shadow.camera.top = 4;
-    key.shadow.camera.bottom = -1;
-    key.shadow.bias = -0.0005;
-    key.shadow.radius = 4;
-    scene.add(key);
-
-    const fill = new THREE.DirectionalLight(0x88a8ff, 0.55);
-    fill.position.set(-3, 2, 1.5);
-    scene.add(fill);
-
-    const rim = new THREE.SpotLight(0xffe6c9, 1.6, 12, Math.PI / 6, 0.4, 1);
-    rim.position.set(-1.5, 3.5, -3);
-    rim.target.position.set(0, 1.5, 0);
-    scene.add(rim, rim.target);
-
-    const hemi = new THREE.HemisphereLight(0xeaf2ff, 0x453525, 0.35);
-    scene.add(hemi);
-
-    // Floor
-    const floor = new THREE.Mesh(
-      new THREE.CircleGeometry(3.4, 64),
-      new THREE.MeshStandardMaterial({
-        color: 0x9aa6b8,
-        roughness: 0.9,
-        metalness: 0.0,
-      }),
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    scene.add(floor);
-
-    const ao = new THREE.Mesh(
-      new THREE.RingGeometry(0.05, 1.2, 64),
-      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }),
-    );
-    ao.rotation.x = -Math.PI / 2;
-    ao.position.y = 0.001;
-    scene.add(ao);
-
-    // ----- Mouse orbit -----
-    const dom = renderer.domElement;
+    // ----- Mouse / touch orbit controls (per-mount, removed on cleanup) -----
+    const dom = G.renderer.domElement;
     dom.style.cursor = "grab";
     const onDown = (e) => {
-      orbitRef.current.dragging = true;
-      orbitRef.current.lastX = e.clientX;
-      orbitRef.current.lastY = e.clientY;
+      G.orbit.dragging = true;
+      G.orbit.lastX = e.clientX;
+      G.orbit.lastY = e.clientY;
       dom.style.cursor = "grabbing";
     };
     const onUp = () => {
-      orbitRef.current.dragging = false;
+      G.orbit.dragging = false;
       dom.style.cursor = "grab";
     };
     const onMove = (e) => {
-      if (!orbitRef.current.dragging) return;
-      const dx = e.clientX - orbitRef.current.lastX;
-      const dy = e.clientY - orbitRef.current.lastY;
-      orbitRef.current.lastX = e.clientX;
-      orbitRef.current.lastY = e.clientY;
-      orbitRef.current.azim -= dx * 0.008;
-      orbitRef.current.polar = Math.max(0.6, Math.min(2.2, orbitRef.current.polar - dy * 0.006));
+      if (!G.orbit.dragging) return;
+      const dx = e.clientX - G.orbit.lastX;
+      const dy = e.clientY - G.orbit.lastY;
+      G.orbit.lastX = e.clientX;
+      G.orbit.lastY = e.clientY;
+      G.orbit.azim -= dx * 0.008;
+      G.orbit.polar = Math.max(0.6, Math.min(2.2, G.orbit.polar - dy * 0.006));
     };
     const onWheel = (e) => {
       e.preventDefault();
-      orbitRef.current.dist = Math.max(2.4, Math.min(7, orbitRef.current.dist + e.deltaY * 0.003));
+      G.orbit.dist = Math.max(2.4, Math.min(7, G.orbit.dist + e.deltaY * 0.003));
     };
     dom.addEventListener("mousedown", onDown);
     window.addEventListener("mouseup", onUp);
@@ -234,117 +244,95 @@ export default function AvatarSign() {
     let touchPinch = null;
     const onTStart = (e) => {
       if (e.touches.length === 1) {
-        orbitRef.current.dragging = true;
-        orbitRef.current.lastX = e.touches[0].clientX;
-        orbitRef.current.lastY = e.touches[0].clientY;
+        G.orbit.dragging = true;
+        G.orbit.lastX = e.touches[0].clientX;
+        G.orbit.lastY = e.touches[0].clientY;
       } else if (e.touches.length === 2) {
         const a = e.touches[0];
         const b = e.touches[1];
         touchPinch = {
           dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1,
-          startDist: orbitRef.current.dist,
+          startDist: G.orbit.dist,
         };
       }
     };
     const onTMove = (e) => {
-      if (e.touches.length === 1 && orbitRef.current.dragging) {
+      if (e.touches.length === 1 && G.orbit.dragging) {
         const t = e.touches[0];
-        const dx = t.clientX - orbitRef.current.lastX;
-        const dy = t.clientY - orbitRef.current.lastY;
-        orbitRef.current.lastX = t.clientX;
-        orbitRef.current.lastY = t.clientY;
-        orbitRef.current.azim -= dx * 0.008;
-        orbitRef.current.polar = Math.max(0.6, Math.min(2.2, orbitRef.current.polar - dy * 0.006));
+        const dx = t.clientX - G.orbit.lastX;
+        const dy = t.clientY - G.orbit.lastY;
+        G.orbit.lastX = t.clientX;
+        G.orbit.lastY = t.clientY;
+        G.orbit.azim -= dx * 0.008;
+        G.orbit.polar = Math.max(0.6, Math.min(2.2, G.orbit.polar - dy * 0.006));
       } else if (e.touches.length === 2 && touchPinch) {
         const a = e.touches[0];
         const b = e.touches[1];
         const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
-        orbitRef.current.dist = Math.max(2.4, Math.min(7, touchPinch.startDist * (touchPinch.dist / d)));
+        G.orbit.dist = Math.max(2.4, Math.min(7, touchPinch.startDist * (touchPinch.dist / d)));
       }
     };
     const onTEnd = () => {
-      orbitRef.current.dragging = false;
+      G.orbit.dragging = false;
       touchPinch = null;
     };
     dom.addEventListener("touchstart", onTStart, { passive: true });
     dom.addEventListener("touchmove", onTMove, { passive: true });
     dom.addEventListener("touchend", onTEnd);
 
-    // ----- Animation loop (pausable) -----
-    const clock = new THREE.Clock();
-    let animActive = true;
-    const tick = () => {
-      if (!animActive) return;
-      const dt = Math.min(0.05, clock.getDelta());
+    // ----- Animation loop driven by the singleton -----
+    G.stepCallback = (dt) => {
       stylizedAnimRef.current?.step(dt);
       realisticRef.current?.step(dt);
-
-      const o = orbitRef.current;
+    };
+    const tick = () => {
+      if (!G.animActive) return;
+      const dt = Math.min(0.05, G.clock.getDelta());
+      G.stepCallback?.(dt);
+      const o = G.orbit;
       const cx = Math.sin(o.azim) * Math.sin(o.polar) * o.dist;
       const cy = Math.cos(o.polar) * o.dist + 1.4;
       const cz = Math.cos(o.azim) * Math.sin(o.polar) * o.dist;
-      cam.position.set(cx, cy, cz);
-      cam.lookAt(0, 1.55, 0);
-
-      renderer.render(scene, cam);
-      animFrameRef.current = requestAnimationFrame(tick);
+      G.cam.position.set(cx, cy, cz);
+      G.cam.lookAt(0, 1.55, 0);
+      G.renderer.render(G.scene, G.cam);
+      G.animFrameId = requestAnimationFrame(tick);
     };
+    G.animActive = true;
+    G.clock.start();
     tick();
 
     const onResize = () => {
       const w2 = mount.clientWidth;
       const h2 = mount.clientHeight;
-      cam.aspect = w2 / h2;
-      cam.updateProjectionMatrix();
-      renderer.setSize(w2, h2);
+      if (!w2 || !h2) return;
+      G.cam.aspect = w2 / h2;
+      G.cam.updateProjectionMatrix();
+      G.renderer.setSize(w2, h2);
     };
     const ro = new ResizeObserver(onResize);
     ro.observe(mount);
     window.addEventListener("resize", onResize);
 
-    // Register the scene so a re-mount within 80ms reuses it (StrictMode)
-    const reg = {
-      scene,
-      cam,
-      renderer,
-      orbit: orbitRef.current,
-      disposeTimer: null,
-      resume() {
-        if (animActive) return;
-        animActive = true;
-        clock.start();
-        tick();
-      },
-      dispose() {
-        animActive = false;
-        cancelAnimationFrame(animFrameRef.current);
-        window.removeEventListener("resize", onResize);
-        ro.disconnect();
-        dom.removeEventListener("mousedown", onDown);
-        window.removeEventListener("mouseup", onUp);
-        window.removeEventListener("mousemove", onMove);
-        dom.removeEventListener("wheel", onWheel);
-        dom.removeEventListener("touchstart", onTStart);
-        dom.removeEventListener("touchmove", onTMove);
-        dom.removeEventListener("touchend", onTEnd);
-        try {
-          renderer.forceContextLoss?.();
-        } catch {}
-        try {
-          renderer.dispose();
-          if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
-        } catch {}
-        SCENE_REGISTRY.delete(mount);
-      },
-    };
-    SCENE_REGISTRY.set(mount, reg);
-
     return () => {
-      // Pause the animation loop so a quick re-mount can resume it without re-init.
-      animActive = false;
-      cancelAnimationFrame(animFrameRef.current);
-      // Schedule disposal — cancelled if the component remounts in <80ms (StrictMode).
-      reg.disposeTimer = setTimeout(() => reg.dispose(), 80);
+      // Stop the loop; KEEP the WebGL context alive so the next mount of
+      // /avatar can reuse it without hitting the per-page context limit.
+      G.animActive = false;
+      cancelAnimationFrame(G.animFrameId);
+      G.stepCallback = null;
+      window.removeEventListener("resize", onResize);
+      ro.disconnect();
+      dom.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("mousemove", onMove);
+      dom.removeEventListener("wheel", onWheel);
+      dom.removeEventListener("touchstart", onTStart);
+      dom.removeEventListener("touchmove", onTMove);
+      dom.removeEventListener("touchend", onTEnd);
+      // Detach canvas from this mount (don't dispose — singleton survives)
+      if (mount.contains(G.renderer.domElement)) {
+        mount.removeChild(G.renderer.domElement);
+      }
     };
   }, []);
 
@@ -405,6 +393,19 @@ export default function AvatarSign() {
     swap();
     return () => {
       cancelled = true;
+      // Important: when AvatarSign unmounts (e.g., user navigates away),
+      // also drop the avatar from the shared singleton scene so the next
+      // mount starts clean. The Three.js renderer + scene survive; only
+      // the avatar mesh is recreated.
+      if (realisticRef.current) {
+        try { realisticRef.current.dispose(); } catch {}
+        realisticRef.current = null;
+      }
+      if (stylizedRootRef.current && sceneRef.current) {
+        try { sceneRef.current.remove(stylizedRootRef.current); } catch {}
+        stylizedRootRef.current = null;
+      }
+      stylizedAnimRef.current = null;
     };
   }, [mode]);
 
