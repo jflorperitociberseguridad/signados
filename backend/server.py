@@ -11,6 +11,7 @@ spaced frames with OpenCV and send them as multimodal images.
 import asyncio
 import base64
 import json
+import secrets
 import logging
 import os
 import shutil
@@ -1546,6 +1547,20 @@ BACKUP_COLLECTIONS = [
 BACKUP_VERSION = 1
 
 
+@api_router.post("/admin/teaching/backup/token")
+async def teaching_backup_token(request: Request):
+    """Mint a one-shot token (5-min TTL) the browser can use to download the
+    backup ZIP via direct navigation — works around Safari/iOS blocking the
+    fetch+blob+anchor-click pattern."""
+    _verify_admin_either(request)
+    token = secrets.token_urlsafe(32)
+    await db.backup_tokens.insert_one({
+        "_id": token,
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"token": token, "expires_in": 300}
+
+
 def _json_default(v):
     if isinstance(v, datetime):
         return v.isoformat()
@@ -1555,10 +1570,31 @@ def _json_default(v):
 
 
 @api_router.get("/admin/teaching/backup")
-async def teaching_backup(request: Request):
+async def teaching_backup(request: Request, token: Optional[str] = None):
     """Download a full ZIP snapshot: MongoDB collections + uploaded teaching files.
-    Streams to the client so large datasets don't bloat RAM."""
-    _verify_admin_either(request)
+    Streams to the client so large datasets don't bloat RAM.
+
+    Auth: either a valid `X-Admin-Password` header OR a one-shot
+    `?token=...` query param previously obtained via POST /backup/token.
+    The token route exists because some browsers (Safari iOS, strict
+    privacy mode) block the fetch+blob+anchor-click pattern that would
+    normally be needed to send the admin header on a download — direct
+    navigation with a token sidesteps that entirely.
+    """
+    if token:
+        # One-shot token: must exist and be unconsumed
+        bt = await db.backup_tokens.find_one_and_delete({"_id": token})
+        if not bt:
+            raise HTTPException(status_code=401, detail="Token inválido o ya usado")
+        # Allow 5-minute window
+        try:
+            issued_at = datetime.fromisoformat(bt["issued_at"])
+        except Exception:
+            raise HTTPException(status_code=401, detail="Token corrupto")
+        if (datetime.now(timezone.utc) - issued_at).total_seconds() > 300:
+            raise HTTPException(status_code=401, detail="Token caducado")
+    else:
+        _verify_admin_either(request)
 
     import io
     import zipfile

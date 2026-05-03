@@ -291,11 +291,16 @@ export async function teachingBackupPreview(pwd) {
   return data;
 }
 export function teachingBackupDownloadUrl() {
-  // The actual download is triggered via a temporary fetch call so we can
-  // inject the admin header. Returns the absolute URL.
   return `${API}/admin/teaching/backup`;
 }
+export async function teachingBackupToken(pwd) {
+  const { data } = await api.post("/admin/teaching/backup/token", {}, adminH(pwd));
+  return data; // { token, expires_in }
+}
 export async function teachingBackupDownloadBlob(pwd) {
+  // Legacy fallback (used when navigator-style download is undesired).
+  // The default flow is now token-based direct navigation, which avoids
+  // browser blockers around fetch+blob+anchor-click on Safari/iOS.
   const res = await fetch(teachingBackupDownloadUrl(), {
     headers: { "X-Admin-Password": pwd },
   });

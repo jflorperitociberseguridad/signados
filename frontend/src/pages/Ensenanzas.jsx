@@ -76,6 +76,8 @@ import {
   teachingDeleteApiKey,
   teachingTestApiKey,
   teachingBackupPreview,
+  teachingBackupDownloadUrl,
+  teachingBackupToken,
   teachingBackupDownloadBlob,
   teachingRestore,
   adminChangePassword,
@@ -559,19 +561,44 @@ export default function Ensenanzas() {
   const downloadBackup = async () => {
     setBackupBusy(true);
     try {
-      const blob = await teachingBackupDownloadBlob(password);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
+      // Primary path: mint a one-shot token, then trigger native browser
+      // navigation. This works on Safari/iOS where fetch+blob+anchor-click
+      // is silently blocked.
+      const { token } = await teachingBackupToken(password);
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const url = `${teachingBackupDownloadUrl()}?token=${encodeURIComponent(token)}&filename=signlang-backup-${stamp}.zip`;
+      // Use a real anchor with target=_self so the browser handles the
+      // Content-Disposition header and the suggested filename natively.
+      const a = document.createElement("a");
       a.href = url;
-      a.download = `signlang-backup-${stamp}.zip`;
+      a.rel = "noopener";
+      // No download attribute needed — the server returns Content-Disposition
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      toast.success("Backup descargado");
+      toast.success("Descarga iniciada", {
+        description: "Si tu navegador no muestra la descarga, comprueba el bloqueador de pop-ups.",
+      });
     } catch (e) {
-      toast.error("Error al descargar backup", { description: e?.message });
+      // Fallback: classic fetch+blob path. Some corporate proxies kill
+      // streamed responses; this catches them.
+      try {
+        const blob = await teachingBackupDownloadBlob(password);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        a.href = url;
+        a.download = `signlang-backup-${stamp}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        toast.success("Backup descargado");
+      } catch (e2) {
+        toast.error("Error al descargar backup", {
+          description: e2?.message || e?.message,
+        });
+      }
     } finally {
       setBackupBusy(false);
     }
