@@ -47,6 +47,8 @@ import {
   KeyRound,
   Eye,
   EyeOff,
+  Download,
+  Archive,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAdminAuth } from "../lib/AdminAuthContext";
@@ -73,6 +75,9 @@ import {
   teachingUpdateApiKey,
   teachingDeleteApiKey,
   teachingTestApiKey,
+  teachingBackupPreview,
+  teachingBackupDownloadBlob,
+  teachingRestore,
   adminChangePassword,
 } from "../lib/api";
 
@@ -160,6 +165,14 @@ export default function Ensenanzas() {
   const [pwdConfirm, setPwdConfirm] = useState("");
   const [pwdBusy, setPwdBusy] = useState(false);
 
+  // Backup / Restore
+  const [backupPreview, setBackupPreview] = useState(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [restoreFile, setRestoreFile] = useState(null);
+  const [restoreWipe, setRestoreWipe] = useState(false);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreResult, setRestoreResult] = useState(null);
+
   // Global variant
   const { variant, setVariant } = useLanguageVariant();
 
@@ -183,7 +196,7 @@ export default function Ensenanzas() {
     if (!isAdmin) return;
     setFilesLoading(true);
     try {
-      const [f, k, c, s, v, ai, akey] = await Promise.all([
+      const [f, k, c, s, v, ai, akey, bp] = await Promise.all([
         teachingListFiles(password).catch(() => []),
         teachingKnowledge(password, { q: kbQ, language: kbLang, confidence: kbConfidence, limit: 200 }).catch(() => []),
         teachingListCorrections(password).catch(() => []),
@@ -191,6 +204,7 @@ export default function Ensenanzas() {
         teachingVideos(password).catch(() => []),
         teachingGetAIConfig(password).catch(() => null),
         teachingGetApiKey(password).catch(() => null),
+        teachingBackupPreview(password).catch(() => null),
       ]);
       setFiles(f);
       setKb(k);
@@ -202,6 +216,7 @@ export default function Ensenanzas() {
         setAiCfgDraft((d) => d || ai);
       }
       if (akey) setApiKeyInfo(akey);
+      if (bp) setBackupPreview(bp);
     } finally {
       setFilesLoading(false);
     }
@@ -540,6 +555,57 @@ export default function Ensenanzas() {
     }
   };
 
+  // ----- Backup / Restore handlers -----
+  const downloadBackup = async () => {
+    setBackupBusy(true);
+    try {
+      const blob = await teachingBackupDownloadBlob(password);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      a.href = url;
+      a.download = `signlang-backup-${stamp}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast.success("Backup descargado");
+    } catch (e) {
+      toast.error("Error al descargar backup", { description: e?.message });
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const doRestore = async () => {
+    if (!restoreFile) {
+      toast.error("Selecciona un archivo ZIP primero");
+      return;
+    }
+    const warn = restoreWipe
+      ? "⚠️ Se borrarán TODOS los archivos de /teaching y se reemplazarán las colecciones. ¿Continuar?"
+      : "⚠️ Se reemplazarán las colecciones MongoDB con el contenido del backup. Los archivos se añadirán/sobrescribirán. ¿Continuar?";
+    if (!window.confirm(warn)) return;
+
+    setRestoreBusy(true);
+    setRestoreResult(null);
+    try {
+      const res = await teachingRestore(password, restoreFile, { wipeFiles: restoreWipe });
+      setRestoreResult(res);
+      toast.success("Restauración completada", {
+        description: `${Object.keys(res?.summary?.collections || {}).length} colecciones · ${res?.summary?.files_restored || 0} archivos`,
+      });
+      // Refresh everything so the UI reflects the restored data
+      await refreshAll();
+    } catch (e) {
+      toast.error("Error al restaurar", {
+        description: e?.response?.data?.detail || e?.message,
+      });
+    } finally {
+      setRestoreBusy(false);
+    }
+  };
+
   const draft = aiCfgDraft || {};
   const dirty = aiCfg && JSON.stringify(aiCfgDraft) !== JSON.stringify(aiCfg);
 
@@ -654,6 +720,9 @@ export default function Ensenanzas() {
           </TabsTrigger>
           <TabsTrigger value="apikey" data-testid="tab-api-key">
             <Key className="w-4 h-4 mr-1.5" /> API IA
+          </TabsTrigger>
+          <TabsTrigger value="backup" data-testid="tab-backup">
+            <Archive className="w-4 h-4 mr-1.5" /> Copia de seguridad
           </TabsTrigger>
         </TabsList>
 
@@ -1589,6 +1658,117 @@ export default function Ensenanzas() {
                 </div>
               </Card>
             </div>
+          </div>
+        </TabsContent>
+
+        {/* ---- TAB 7: Copia de seguridad ---- */}
+        <TabsContent value="backup" className="mt-5" data-testid="tab-content-backup">
+          <div className="grid lg:grid-cols-2 gap-5">
+            {/* Download */}
+            <Card className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl">
+              <h3 className="font-display text-lg font-semibold flex items-center gap-2 mb-1">
+                <Download className="w-5 h-5 text-[#002FA7]" /> Descargar backup
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Archivo ZIP con todas las colecciones MongoDB (diccionario, KB Enseñanzas, correcciones, configuración IA, clave API cifrada, contraseña admin) y los archivos subidos en la zona Enseñanzas.
+              </p>
+              {backupPreview && (
+                <div className="space-y-1.5 text-xs bg-slate-50 dark:bg-slate-900/40 rounded-lg p-3 mb-4 border border-slate-200 dark:border-slate-700">
+                  {Object.entries(backupPreview.collections || {}).map(([k, v]) => (
+                    <div key={k} className="flex justify-between">
+                      <span className="font-mono text-slate-600 dark:text-slate-300">{k}</span>
+                      <span className="font-semibold">{v}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between pt-1.5 mt-1.5 border-t border-slate-200 dark:border-slate-700">
+                    <span className="font-mono text-slate-600 dark:text-slate-300">archivos Enseñanzas</span>
+                    <span className="font-semibold">
+                      {backupPreview.files_count} · {(backupPreview.files_bytes / 1024).toFixed(1)} KB
+                    </span>
+                  </div>
+                </div>
+              )}
+              <Button
+                data-testid="backup-download-btn"
+                onClick={downloadBackup}
+                disabled={backupBusy}
+                className="btn-ikb w-full"
+              >
+                {backupBusy ? (
+                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Preparando…</>
+                ) : (
+                  <><Download className="w-4 h-4 mr-2" /> Descargar ZIP</>
+                )}
+              </Button>
+            </Card>
+
+            {/* Restore */}
+            <Card className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl">
+              <h3 className="font-display text-lg font-semibold flex items-center gap-2 mb-1">
+                <Upload className="w-5 h-5 text-emerald-600" /> Restaurar backup
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Sube un ZIP previamente descargado. Se reemplazarán las colecciones por completo. Los archivos se añaden al directorio Enseñanzas (o se reemplazan si marcas la opción).
+              </p>
+              <div className="space-y-3">
+                <Input
+                  type="file"
+                  accept=".zip,application/zip"
+                  data-testid="backup-restore-file"
+                  onChange={(e) => {
+                    setRestoreFile(e.target.files?.[0] || null);
+                    setRestoreResult(null);
+                  }}
+                />
+                {restoreFile && (
+                  <div className="text-xs text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-900/40 rounded-lg p-2.5 border border-slate-200 dark:border-slate-700">
+                    <strong>{restoreFile.name}</strong> · {(restoreFile.size / 1024).toFixed(1)} KB
+                  </div>
+                )}
+                <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={restoreWipe}
+                    onChange={(e) => setRestoreWipe(e.target.checked)}
+                    data-testid="backup-restore-wipe"
+                  />
+                  Borrar archivos existentes antes de restaurar
+                </label>
+                <Button
+                  data-testid="backup-restore-btn"
+                  onClick={doRestore}
+                  disabled={restoreBusy || !restoreFile}
+                  variant="outline"
+                  className="w-full border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                >
+                  {restoreBusy ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Restaurando…</>
+                  ) : (
+                    <><Upload className="w-4 h-4 mr-2" /> Restaurar</>
+                  )}
+                </Button>
+              </div>
+
+              {restoreResult && (
+                <div
+                  data-testid="backup-restore-result"
+                  className="mt-4 p-3 rounded-lg text-sm border border-emerald-200 bg-emerald-50 text-emerald-800"
+                >
+                  <div className="flex items-center gap-1 font-semibold mb-1">
+                    <CheckCircle2 className="w-4 h-4" /> Restauración completada
+                  </div>
+                  <div className="text-xs space-y-0.5">
+                    {Object.entries(restoreResult.summary?.collections || {}).map(([k, v]) => (
+                      <div key={k}>· {k}: {v} documentos</div>
+                    ))}
+                    <div>· Archivos restaurados: {restoreResult.summary?.files_restored || 0}</div>
+                    {restoreResult.summary?.files_skipped > 0 && (
+                      <div className="text-amber-700">· Archivos saltados: {restoreResult.summary.files_skipped}</div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </Card>
           </div>
         </TabsContent>
       </Tabs>

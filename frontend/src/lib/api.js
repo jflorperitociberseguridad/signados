@@ -284,6 +284,38 @@ export async function teachingTestApiKey(pwd) {
   const { data } = await api.post("/admin/teaching/api-key/test", {}, adminH(pwd));
   return data;
 }
+
+// Backup / Restore
+export async function teachingBackupPreview(pwd) {
+  const { data } = await api.get("/admin/teaching/backup/preview", adminH(pwd));
+  return data;
+}
+export function teachingBackupDownloadUrl() {
+  // The actual download is triggered via a temporary fetch call so we can
+  // inject the admin header. Returns the absolute URL.
+  return `${API}/admin/teaching/backup`;
+}
+export async function teachingBackupDownloadBlob(pwd) {
+  const res = await fetch(teachingBackupDownloadUrl(), {
+    headers: { "X-Admin-Password": pwd },
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Backup ${res.status}: ${txt.slice(0, 200)}`);
+  }
+  return await res.blob();
+}
+export async function teachingRestore(pwd, zipFile, { wipeFiles = false } = {}) {
+  const fd = new FormData();
+  fd.append("backup", zipFile);
+  fd.append("wipe_files", wipeFiles ? "true" : "false");
+  const { data } = await api.post("/admin/teaching/restore", fd, {
+    ...adminH(pwd),
+    headers: { ...adminH(pwd).headers, "Content-Type": "multipart/form-data" },
+    timeout: 300000,
+  });
+  return data;
+}
 export function teachingFileStreamUrl(fileId) {
   // Note: this URL still requires X-Admin-Password header. Use it only as
   // the `src` of an authenticated <video> via the streamWithAuth helper or

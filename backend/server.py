@@ -23,7 +23,7 @@ from typing import List, Optional
 
 import cv2  # type: ignore
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -1528,6 +1528,212 @@ async def teaching_test_api_key(request: Request):
         }
     except Exception as exc:
         return {"ok": False, "source": source, "error": str(exc)[:300]}
+
+
+# ---------------------------------------------------------------------------
+# Backup / Restore (Enseñanzas → tab "Backup")
+# ---------------------------------------------------------------------------
+# Collections included in a backup. Does NOT include transient collections
+# like events, translations, payment_transactions.
+BACKUP_COLLECTIONS = [
+    "community_dictionary",
+    "teaching_files",
+    "knowledge_base",
+    "corrections",
+    "api_keys",
+    "config",
+]
+BACKUP_VERSION = 1
+
+
+def _json_default(v):
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, Path):
+        return str(v)
+    return str(v)
+
+
+@api_router.get("/admin/teaching/backup")
+async def teaching_backup(request: Request):
+    """Download a full ZIP snapshot: MongoDB collections + uploaded teaching files.
+    Streams to the client so large datasets don't bloat RAM."""
+    _verify_admin_either(request)
+
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        manifest = {
+            "version": BACKUP_VERSION,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "app": "SignLanguage Pro",
+            "collections": {},
+            "files_count": 0,
+        }
+
+        # Dump MongoDB collections (_id excluded from payloads)
+        for coll_name in BACKUP_COLLECTIONS:
+            try:
+                docs = await db[coll_name].find({}, {"_id": 0}).to_list(100000)
+            except Exception as exc:
+                logger.warning("Could not dump %s: %s", coll_name, exc)
+                docs = []
+            manifest["collections"][coll_name] = len(docs)
+            zf.writestr(
+                f"mongo/{coll_name}.json",
+                json.dumps(docs, indent=2, default=_json_default, ensure_ascii=False),
+            )
+
+        # Teaching files (PDFs, DOCX, images, videos)
+        t_dir = teaching_service.teaching_dir()
+        files_count = 0
+        if t_dir.exists():
+            for fp in t_dir.iterdir():
+                if fp.is_file():
+                    try:
+                        zf.write(fp, f"teaching_files/{fp.name}")
+                        files_count += 1
+                    except Exception as exc:
+                        logger.warning("Skip %s: %s", fp, exc)
+        manifest["files_count"] = files_count
+
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+
+    buf.seek(0)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    headers = {
+        "Content-Disposition": f'attachment; filename="signlang-backup-{stamp}.zip"',
+    }
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers=headers,
+    )
+
+
+@api_router.get("/admin/teaching/backup/preview")
+async def teaching_backup_preview(request: Request):
+    """Cheap introspection of what WOULD be included in a backup.
+    Lets the UI show counts before the user clicks Download."""
+    _verify_admin_either(request)
+    counts = {}
+    for coll_name in BACKUP_COLLECTIONS:
+        try:
+            counts[coll_name] = await db[coll_name].count_documents({})
+        except Exception:
+            counts[coll_name] = 0
+    t_dir = teaching_service.teaching_dir()
+    files_count = 0
+    total_bytes = 0
+    if t_dir.exists():
+        for fp in t_dir.iterdir():
+            if fp.is_file():
+                files_count += 1
+                try:
+                    total_bytes += fp.stat().st_size
+                except Exception:
+                    pass
+    return {
+        "collections": counts,
+        "files_count": files_count,
+        "files_bytes": total_bytes,
+    }
+
+
+@api_router.post("/admin/teaching/restore")
+async def teaching_restore(
+    request: Request,
+    backup: UploadFile = File(...),
+    wipe_files: Optional[str] = Form(default="false"),
+):
+    """Restore a previously downloaded backup ZIP. Replaces the listed
+    collections entirely. Files are extracted to the teaching dir; if
+    `wipe_files=true` the existing teaching dir is cleared first."""
+    _verify_admin_either(request)
+
+    import io
+    import zipfile
+
+    raw = await backup.read()
+    if not raw:
+        raise HTTPException(400, "Archivo vacío")
+    if len(raw) > 2 * 1024 * 1024 * 1024:  # 2 GB safety cap
+        raise HTTPException(413, "Archivo demasiado grande (máx 2 GB)")
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "El archivo no es un ZIP válido")
+
+    names = zf.namelist()
+    if "manifest.json" not in names:
+        raise HTTPException(400, "ZIP sin manifest.json — no es un backup de SignLanguage Pro")
+    try:
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(400, f"manifest.json inválido: {exc}")
+    if manifest.get("version") != BACKUP_VERSION:
+        raise HTTPException(
+            400,
+            f"Versión de backup {manifest.get('version')} no soportada (esperado {BACKUP_VERSION})",
+        )
+
+    summary = {"collections": {}, "files_restored": 0, "files_skipped": 0}
+
+    # Replace MongoDB collections
+    for coll_name in BACKUP_COLLECTIONS:
+        entry = f"mongo/{coll_name}.json"
+        if entry not in names:
+            continue
+        try:
+            docs = json.loads(zf.read(entry).decode("utf-8"))
+        except Exception as exc:
+            logger.warning("Skip %s: %s", entry, exc)
+            continue
+        if not isinstance(docs, list):
+            continue
+        # Wipe + insert
+        await db[coll_name].delete_many({})
+        if docs:
+            try:
+                await db[coll_name].insert_many(docs)
+            except Exception as exc:
+                logger.exception("insert_many %s failed: %s", coll_name, exc)
+        summary["collections"][coll_name] = len(docs)
+
+    # Restore teaching files
+    t_dir = teaching_service.teaching_dir()
+    t_dir.mkdir(parents=True, exist_ok=True)
+    if str(wipe_files).lower() in ("true", "1", "yes"):
+        for fp in t_dir.iterdir():
+            if fp.is_file():
+                try:
+                    fp.unlink()
+                except Exception:
+                    pass
+
+    for name in names:
+        if not name.startswith("teaching_files/") or name.endswith("/"):
+            continue
+        # Prevent zip-slip
+        base = os.path.basename(name)
+        if not base:
+            continue
+        dest = t_dir / base
+        try:
+            with zf.open(name) as src, open(dest, "wb") as out:
+                out.write(src.read())
+            summary["files_restored"] += 1
+        except Exception as exc:
+            logger.warning("Could not restore %s: %s", name, exc)
+            summary["files_skipped"] += 1
+
+    # Reload admin password / API key overrides from the freshly-restored config
+    await _load_admin_runtime_overrides()
+
+    return {"ok": True, "manifest": manifest, "summary": summary}
 
 
 
